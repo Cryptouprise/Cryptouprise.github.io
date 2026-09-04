@@ -16,32 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download pnpm build:web tarball (or Manus media fallback)
+      - name: Download pnpm build:web tarball from latest main
         run: |
           set -euo pipefail
-          TAR_URL="https://tmpfiles.org/dl/1788491340.f869dd085bcf2543/wxwjho2GbQiI/control-tower-preview.tgz"
-          if curl -fL --retry 6 --retry-delay 2 -o /tmp/site.tgz "$TAR_URL" && tar -tzf /tmp/site.tgz >/dev/null; then
-            tar -xzf /tmp/site.tgz
-            rm -rf chunks
-            echo "Extracted build:web tarball"
-          else
-            echo "Tarball unavailable; downloading recovered media from Manus"
-            mkdir -p media
-            BASE="https://infiniteai-n8m6t66n.manus.space/manus-storage"
-            for f in \
-              infinite-ai-final-same-presenter-hero-vsl-repaired_006e0a68.mp4 \
-              infinite-ai-hero-control-tower_30605538.png \
-              infinite-ai-mark_ae4929b8.png \
-              infinite-ai-widget-conversion_5f93efd9.png \
-              infinite-ai-dashboard-intelligence_b1b9c0d4.png \
-              infinite-ai-ugc-speed-to-lead-demo_a4bf59c6.mp4; do
-              curl -fL --retry 4 --retry-delay 2 -o "media/$f" "$BASE/$f"
-            done
-            curl -fL -o media/liam-ottley-youtube-rwsOc7TnWAo.jpg https://img.youtube.com/vi/rwsOc7TnWAo/maxresdefault.jpg
-            curl -fL -o media/arseny-shatokhin-youtube-ED4SUWgoAhw.jpg https://img.youtube.com/vi/ED4SUWgoAhw/maxresdefault.jpg
-          fi
+          TAR_URL="https://tmpfiles.org/dl/1788496210.820db49e34ec240b/wGwohmGO2CIA/control-tower-preview.tgz"
+          curl -fL --retry 6 --retry-delay 2 -o /tmp/site.tgz "$TAR_URL"
+          tar -tzf /tmp/site.tgz >/dev/null
+          rm -rf chunks assets
+          tar -xzf /tmp/site.tgz
+          echo "Extracted build:web tarball"
+          test -f media/infinite-ai-final-same-presenter-hero-vsl-repaired_006e0a68.mp4
           test -f media/infinite-ai-mark_ae4929b8.png
-          ls -lh media
+          test -f assets/index-tlDMlLIo.js
+          ls -lh media assets
 
       - name: Commit published site
         run: |
@@ -51,6 +38,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "Publish Control Tower preview from main with recovered media"
+            git commit -m "Publish Control Tower preview from main with funnel + recovered media"
             git push
           fi
