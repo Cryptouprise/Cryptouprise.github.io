@@ -1,42 +1,32 @@
 <!doctype html>
 <html lang="en">
+
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1" />
     <meta name="description" content="Infinite AI builds outcome-based AI departments for faster lead response, more appointments, database reactivation, sales accountability, and executive revenue visibility." />
     <meta name="robots" content="index,follow" />
     <meta name="theme-color" content="#071018" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Infinite AI | Your AI Department. Outcomes Over Automation." />
     <meta property="og:description" content="Choose the revenue outcome you need. Infinite AI builds the AI department behind it." />
-    <meta property="og:image" content="/media/infinite-ai-mark.svg" />
+    <meta property="og:image" content="/media/infinite-ai-hero-control-tower_30605538.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Infinite AI | Outcomes Over Automation." />
+    <meta name="twitter:description" content="AI revenue systems for faster response, better booking, recovery, and executive visibility." />
     <title>Infinite AI | Your AI Department. Outcomes Over Automation.</title>
-    <link rel="icon" type="image/svg+xml" href="/media/infinite-ai-mark.svg" />
+    <link rel="icon" type="image/svg+xml" href="/media/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <script type="module">
-      const cssParts = Array.from({ length: 15 }, (_, i) => `css_${String(i).padStart(2, "0")}`);
-      const jsParts = Array.from({ length: 45 }, (_, i) => `js_${String(i).padStart(2, "0")}`);
-      const load = (name) =>
-        fetch(`/chunks/${name}.txt`).then((r) => {
-          if (!r.ok) throw new Error(`${name} ${r.status}`);
-          return r.text();
-        });
-      const [cssChunks, jsChunks] = await Promise.all([
-        Promise.all(cssParts.map(load)),
-        Promise.all(jsParts.map(load)),
-      ]);
-      const style = document.createElement("style");
-      style.textContent = cssChunks.join("");
-      document.head.appendChild(style);
-      const script = document.createElement("script");
-      script.type = "module";
-      script.textContent = jsChunks.join("");
-      document.body.appendChild(script);
-    </script>
+    <script type="module" crossorigin src="/assets/index-D40mXzN7.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DduJq4hw.css">
   </head>
+
   <body>
     <div id="root"></div>
   </body>
+
 </html>
