@@ -19,7 +19,7 @@ jobs:
       - name: Download pnpm build:web tarball from latest main
         run: |
           set -euo pipefail
-          TAR_URL="https://n.uguu.se/btjCNJHx.tgz"
+          TAR_URL="https://h.uguu.se/sohajXoe.tgz"
           curl -fL --retry 6 --retry-delay 2 -o /tmp/site.tgz "$TAR_URL"
           tar -tzf /tmp/site.tgz >/dev/null
           rm -rf chunks assets
@@ -27,7 +27,9 @@ jobs:
           echo "Extracted build:web tarball"
           test -f media/infinite-ai-final-same-presenter-hero-vsl-repaired_006e0a68.mp4
           test -f media/infinite-ai-mark_ae4929b8.png
-          test -f assets/index-B9dmfESI.js
+          test -f media/ai-department-control-tower.mp4
+          test "$(wc -c < media/ai-department-control-tower.mp4)" -eq 465716
+          test -f assets/index-D-3j964N.js
           ls -lh media assets
 
       - name: Commit published site
@@ -38,6 +40,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "Publish Control Tower preview from main@891f05d with outcome consoles + recovered media"
+            git commit -m "Publish Control Tower preview from main@acbca48 with AI Department demo mp4"
             git push
           fi
