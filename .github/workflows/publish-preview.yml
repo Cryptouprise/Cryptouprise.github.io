@@ -16,10 +16,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download pnpm build:web tarball from latest main
+      - name: Download pnpm build:web tarball from main@388de6c (PR #10)
         run: |
           set -euo pipefail
-          TAR_URL="https://h.uguu.se/uWKtlYWP.tgz"
+          TAR_URL="https://d.uguu.se/agovCJbz.tgz"
           curl -fL --retry 6 --retry-delay 2 -o /tmp/site.tgz "$TAR_URL"
           tar -tzf /tmp/site.tgz >/dev/null
           rm -rf chunks assets
@@ -29,10 +29,17 @@ jobs:
           test -f media/infinite-ai-mark_ae4929b8.png
           test -f media/ai-department-control-tower.mp4
           test -f media/ai-department-control-tower.jpg
+          test -f media/infinite-ai-hero-vsl-poster.jpg
+          test -f media/infinite-ai-speed-to-lead-poster.jpg
           test "$(wc -c < media/ai-department-control-tower.mp4)" -eq 465716
-          test -f assets/index-D-3j964N.js
-          grep -q "ai-department-control-tower.mp4" assets/index-D-3j964N.js
-          grep -q "preview main@28d9113" index.html
+          test -f assets/index-D89johlc.js
+          test -f assets/index-DL04IBJl.css
+          test -f 404.html
+          cmp -s index.html 404.html
+          grep -q "ai-department-control-tower.mp4" assets/index-D89johlc.js
+          grep -q "infinite-ai-hero-vsl-poster.jpg" assets/index-D89johlc.js
+          grep -q "Start intake" assets/index-D89johlc.js
+          grep -q "preview main@388de6c" index.html
           ls -lh media assets
 
       - name: Commit published site
@@ -43,6 +50,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "Publish Control Tower preview from main@28d9113 with AI Department demo mp4"
+            git commit -m "Publish Control Tower cinema/instrument pass (PR #10)"
             git push
           fi
