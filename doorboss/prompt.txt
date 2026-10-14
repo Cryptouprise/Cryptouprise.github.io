@@ -1,0 +1,74 @@
+Build the complete DoorBoss rep portal in this project. Work through every phase below in order, without stopping to ask me questions. Where anything is ambiguous, use the defaults in the DEFAULTS section. If your platform cannot do a specific item, skip that item, keep building everything else, and list exactly what you skipped and why in the final report. Do not stop until every phase is done or attempted.
+
+SPEC FILES (fetch these and follow them exactly):
+- Database: https://cryptouprise.github.io/doorboss/spec/schema.sql
+- API contract (every route the app calls): https://cryptouprise.github.io/doorboss/spec/api-contract.md
+- GoHighLevel sync spec: https://cryptouprise.github.io/doorboss/spec/ghl-sync.md
+- The app itself (finished, do not rewrite): https://cryptouprise.github.io/doorboss/index.prod.html
+- Service worker: https://cryptouprise.github.io/doorboss/sw.js
+- Manifest: https://cryptouprise.github.io/doorboss/manifest.json
+
+PHASE 1 — Users and login
+Email + password login using the backend's user accounts. Create the `teams` and `users` tables from schema.sql. New signups get role `rep`, no team. Seed one team named "Elite Solar Recovery" and one admin user chase@infiniteai.com on that team. Routes: GET /api/me and GET /api/users per the contract.
+
+PHASE 2 — Database
+Create every remaining table in schema.sql exactly as written, including CHECK constraints and indexes: territories, properties, knocks, appointments, api_keys, outbound_webhooks, user_ai, push_subscriptions, positions, position_history, messages, goals, sync_log, training_items, settings. Insert the `settings` row with id `default`. Do not add or rename columns.
+
+PHASE 3 — API
+Implement every route in api-contract.md under /api with the auth rules stated there (reps see their team's territories; managers and admins see the whole team). Requirements that matter most:
+- POST /api/knocks is idempotent on client_id and updates the property's denormalized status, last_knock_at, last_knock_by, callback_at, appointment_at using the knock with the latest created_at. A knock with status `appointment` creates an appointments row.
+- POST /api/properties upserts by id, else by lower(address)+zip, and assigns territory_id by point-in-polygon.
+- POST /api/territories reassigns properties.territory_id for every property inside the polygon.
+- POST /api/appointments/:id follows the status rules in the contract (no_show re-queues a callback next day 5 pm; held+signed inserts a signed knock; rescheduled writes a new row).
+- GET /api/stats, /api/reps/:id/days, /api/reps/:id/summary, /api/reps/:id/gap, /api/nudges use the metric definitions at the bottom of schema.sql.
+- All timestamps in JSON are ISO-8601 UTC strings.
+- Auth on /api/*: accept the logged-in portal session (cookie, credentials: same-origin) AND an `Authorization: Bearer <token>` header. Also accept an API key from the api_keys table as a bearer token, acting as that key's owner.
+
+PHASE 4 — The Doors page
+Add a page at route /doors, full-screen, no site header, footer or navigation. Its HTML is index.prod.html fetched from the URL above, used exactly as-is. Do not reformat, clean up or restructure it. The only permitted change: if your session auth is token-based rather than cookie-based, prepend one small <script> before </head> that sets localStorage["doorboss.token"] to the current user's bearer token (the app sends it on every request). Allow scripts from cdnjs.cloudflare.com, styles/fonts from fonts.googleapis.com and fonts.gstatic.com, images from tile.openstreetmap.org, server.arcgisonline.com and api.mapbox.com, and the geolocation permission. Serve sw.js at /sw.js with header `Service-Worker-Allowed: /` and manifest.json at /manifest.json. Unauthenticated visits to /doors redirect to login and back.
+
+PHASE 5 — Portal shell
+Around the Doors page, build a sidebar on desktop / bottom bar on mobile with: Doors (/doors), Intake (/intake), Training (/training), Admin (/admin, managers and admins only). Intake: embed the existing Solar Freedom intake form page if it exists in this project; otherwise embed the URL stored in settings.intake_url (nullable, I will fill it in) and show "Intake form not configured" until then. When opened with ?contact=<ghl_contact_id>&property=<id>, pre-fill name, phone, email and address from GET /api/properties/:id. Training: list training_items grouped by category, each with its video link (YouTube/Vimeo/Loom embed) and body; admins can add, edit and delete. Admin: users (add/edit, role, team, color, ghl_user_id, send invite), settings row editor (GHL location id, pipeline id, stage ids, calendar id, intake_url, reknock_days), sync status and retry, API keys, outbound webhooks. Use the brand colors already used in this project; if none, use #f05a1a as the accent on a dark navy base.
+
+PHASE 6 — GoHighLevel sync
+Implement sections 1, 2, 3 and 4 of ghl-sync.md as a background worker: process knocks where synced_at IS NULL and status in (interested, callback, appointment, signed, not_interested), appointments changes, and messages with status queued. Create backend secrets GHL_PIT (GoHighLevel Private Integration token) and GHL_WEBHOOK_KEY (generate a random 32-char value). If GHL_PIT is empty, the worker idles and GET /api/settings returns ghl_configured:false — do not fail. Read location, pipeline, stage and calendar ids from the settings row. Log every HTTP call to sync_log. Routes: GET /api/sync/status, POST /api/sync/retry, and POST /api/webhooks/ghl?key=<GHL_WEBHOOK_KEY> for inbound events (return 200 immediately, process asynchronously).
+
+PHASE 7 — Photos
+POST /api/uploads (multipart `file` + `knock_client_id`) stores in backend file storage and returns { url }. Knock rows carry photo_urls.
+
+PHASE 8 — Reminders
+Generate a VAPID key pair into secrets VAPID_PUBLIC and VAPID_PRIVATE. Implement /api/push/subscribe, DELETE /api/push/subscribe and GET /api/push/vapid. Scheduled job every minute sends web push for: callbacks due in 15 minutes, appointments in 60 minutes, no-shows logged on a rep's door, appointments assigned to a closer, and appointments 45 minutes past with no outcome. Drop a subscription after 5 consecutive 404/410. Fallback: secret GHL_REP_SMS_WEBHOOK (empty for now); when set and a callback/appointment push is not acknowledged within 10 minutes, POST { rep_email, rep_phone, message, propertyId } to it, max 20 per rep per day.
+
+PHASE 9 — Live positions
+POST /api/heartbeat accepts lat, lng, accuracy, fix_at and trail[]; upserts positions and inserts trail into position_history. GET /api/positions (team, managers only) and GET /api/positions/:user/history?day=YYYY-MM-DD (thinned to 2,000 points). Set users.gps_consent_at on a user's first heartbeat. Nightly job deletes position_history older than 30 days.
+
+PHASE 10 — Users admin and geocoding
+POST /api/users and PUT /api/users/:id (admin, or manager within their team) create the portal login and send an invite email. Properties posted without lat/lng get geocode_status queued; a job geocodes them with secret GEOCODE_KEY (Mapbox if the key starts with "pk.", otherwise Google), sets coordinates and territory. GET /api/properties?geocode=queued lists the backlog. If GEOCODE_KEY is empty, leave rows queued.
+
+PHASE 11 — AI
+GET/PUT /api/me/ai (user_ai table; provider company|openai|anthropic, key stored encrypted, never returned). POST /api/ai/brief returns a 4-line door brief; POST /api/ai/draft returns one SMS under 320 characters, no emojis, signed with the rep's first name and "Elite Solar Recovery". Use the user's own key when provider is not company; otherwise secret AI_KEY (Anthropic). If no key is available, return a deterministic brief built from the property fields instead of an error.
+
+PHASE 12 — API keys and outbound webhooks
+POST/GET/DELETE /api/keys (managers), keys shown once at creation, hashed at rest. POST/GET/DELETE /api/webhooks/outbound; fire on knock.created, appointment.updated, territory.updated, property.updated with an HMAC-SHA256 signature header X-DoorBoss-Signature over the raw body using the webhook's secret; retry 3 times with backoff.
+
+PHASE 13 — Self-test, then report
+Run these yourself and record PASS/FAIL for each:
+1. Log in as chase@infiniteai.com; GET /api/me returns role admin.
+2. POST /api/territories with a square polygon over Aurora, CO; POST /api/properties with 3 rows inside it; all 3 get that territory_id.
+3. POST /api/knocks twice with the same client_id; one row stored, property status updated.
+4. POST /api/knocks with status appointment; an appointments row exists; POST /api/appointments/:id { status: no_show } sets the property to callback and inserts a portal knock.
+5. GET /api/reps/<chase id>/days?period=week returns one row for today with doors ≥ 2.
+6. Open /doors logged in: the map renders with the 3 properties, no console errors from /api.
+7. POST /api/heartbeat then GET /api/positions shows the row.
+8. GET /api/settings returns ghl_configured:false (no token yet) and nothing crashes.
+9. Create an API key; call GET /api/properties with it as bearer; it works.
+10. /sw.js serves with the Service-Worker-Allowed header; /manifest.json serves as application/manifest+json.
+
+Final report, in this order: the live URL of /doors and of the login page; the PASS/FAIL list; every item you skipped or could not do, with the reason; the list of secrets I still need to fill in (GHL_PIT, GHL_REP_SMS_WEBHOOK, GEOCODE_KEY, AI_KEY) and the settings fields that are still null; the inbound webhook URL to paste into GoHighLevel workflows.
+
+DEFAULTS
+- Project/app name: DoorBoss. Team: Elite Solar Recovery. Admin: chase@infiniteai.com. Time zone for daily metrics: America/Denver.
+- Roles: rep, manager, admin. New users default to rep.
+- Never change anything inside index.prod.html other than the one optional token script. Later versions of the app arrive as a new file at the same URL; the page must re-fetch it when I say "refresh the Doors app".
+- Never store secrets in the settings table. Never return API keys or AI keys after creation.
+- If a phase partially fails, move on and record it; do not loop on one error.
