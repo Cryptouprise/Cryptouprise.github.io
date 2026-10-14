@@ -87,7 +87,7 @@ svg.leaflet-zoom-animated{will-change:transform}
 
 /* ---------- base ---------- */
 *{box-sizing:border-box}
-html,body{height:100%}
+html,body{height:100%;overflow:hidden;overscroll-behavior:none}   /* the off-screen sheet (translateY 102%) must not give the page a scrollbar / rubber-band on phones */
 body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);font-size:15px;line-height:1.4;-webkit-font-smoothing:antialiased}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;background:none;border:0;padding:0}
@@ -98,7 +98,7 @@ h1,h2,h3{margin:0;font-family:var(--font-display);font-weight:700;letter-spacing
 .muted{color:var(--muted)}
 .eyebrow{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 
-#app{height:100%;display:flex;flex-direction:column;position:relative}
+#app{height:100%;display:flex;flex-direction:column;position:relative;overflow:hidden}
 
 /* ---------- top bar ---------- */
 .topbar{flex:none;display:flex;align-items:center;gap:10px;height:52px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(12px,env(safe-area-inset-right,0px));background:var(--surface);border-bottom:1px solid var(--line);z-index:5}
@@ -232,6 +232,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 .status-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
 .sbtn{height:58px;border-radius:10px;border:2px solid var(--line);background:var(--surface);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;font-size:11px;font-weight:600;color:var(--muted);padding:0 4px;text-align:center}
 .sbtn .sw{width:14px;height:14px;border-radius:50%}
+#saveKnock{position:sticky;bottom:0;z-index:2;box-shadow:0 -6px 14px var(--surface)}   /* phones: Save stays on screen after picking an outcome instead of hiding below the note/photos */
 .sbtn.on{border-color:var(--fg);color:var(--fg);background:var(--surface-2)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:13px}
 .kv b{color:var(--muted);font-weight:600}
@@ -1783,7 +1784,7 @@ function renderMeView(){
     <div class="row"><span class="avatar" style="background:${A.me.color};width:48px;height:48px;font-size:22px">${esc(A.me.name[0])}</span><div><h2>${esc(A.me.name)}</h2><div class="muted" style="font-size:13px">${A.me.role} · ${myTerrs().map(t=>t.name).join(', ')||'no territory'}${streak?' · '+streak+'-day streak':''}</div></div></div>
     <div class="grid3">${goal(m.knocks,g.daily_knocks,'Doors today')}${goal(m.contacts,g.daily_contacts,'Contacts')}${goal(m.appts,g.daily_appts,'Appointments')}</div>
     <div class="grid3"><div class="tile"><div class="v num">${ratio(m.knocks,m.contacts)}</div><div class="l">Doors per contact</div></div><div class="tile"><div class="v num">${m.followups}</div><div class="l">Follow-ups</div></div><div class="tile"><div class="v num">${m.signed}</div><div class="l">Signed</div></div></div>
-    <div class="card stack"><h3 style="font-size:18px">Sync</h3><div class="row between"><span>${A.online?'Online':'Offline — knocks are held on this phone'}</span><span class="muted num">${A.queueLen||0} queued</span></div><div class="row between"><span>GPS</span><span class="muted">${A.gpsOk?'Live':'Unavailable here — using a demo position'}</span></div><button class="btn sm" data-act="flush">Sync now</button></div>
+    <div class="card stack"><h3 style="font-size:18px">Sync</h3><div class="row between"><span>${A.online?'Online':'Offline — knocks are held on this phone'}</span><span class="muted num">${A.queueLen||0} queued</span></div><div class="row between"><span>GPS</span><span class="muted">${A.gpsOk?'Live':(A.myPos?'Unavailable here — using a demo position':'No fix — showing your territory')}</span></div><button class="btn sm" data-act="flush">Sync now</button></div>
     <div class="card stack"><h3 style="font-size:18px">Daily goals</h3><div class="grid3"><label class="f">Doors<input type="number" id="g_k" value="${g.daily_knocks}"></label><label class="f">Contacts<input type="number" id="g_c" value="${g.daily_contacts}"></label><label class="f">Appts<input type="number" id="g_a" value="${g.daily_appts}"></label></div><button class="btn sm" data-act="saveGoals">Save goals</button></div>
     ${A.me.role==='rep'?`<button class="btn block" data-rep="${A.me.id}">My day-by-day grid and comparison</button>`:''}
     <div class="card coach"><h3 style="font-size:18px">Ask the coach</h3><div class="muted" style="font-size:13px">Answers come from your own numbers${(A.settings.ai&&A.settings.ai.provider!=='company')?', phrased by your '+esc(A.settings.ai.provider)+' key':''}.</div>
@@ -1800,7 +1801,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v6 (Book appointment button on every house).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v7 (phone hardening: territory shown without GPS, no page bounce, Save always on screen).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -1906,16 +1907,22 @@ function setMyPos(ll, fromGps, meta){
     if (!A.userMoved && near) A.map.setView(ll, Math.max(A.map.getZoom(), 17));
   }
 }
+/* No GPS (declined, denied, unavailable, or no fix in 16 s): a real rep must still see their doors, not an empty block in
+   Aurora. Demo keeps the sample neighbourhood. Never fights a map the rep already moved. */
+function noFixView(){
+  if (CONFIG.demo){ setMyPos(CONFIG.demoCenter,false); if (!A.userMoved) A.map.setView(CONFIG.demoCenter,16); return; }
+  setMyPos(null,false); if (!A.userMoved && A.map) startView(A.map);
+}
 function gpsConsentThenStart(){
   let ok=false; try { ok = localStorage.getItem('doorboss.gps.consent')==='1'; } catch(e){}
   if (ok){ GPS.consent=true; startGps(); return; }
   openModal({ title:'Share your location while you work', body:`<div class="stack" style="gap:8px;font-size:14px"><div>DoorBoss uses your phone's GPS to put you on the map, pick the next door, and show your manager where the team is <b>while this app is open</b>.</div><div class="muted" style="font-size:13px">It stops the moment you close the app or lock the screen. Your trail for the day is kept for 30 days so coverage can be checked, then deleted. Nothing is tracked outside work hours or outside this app.</div></div>`,
-    actions:[{label:'Not now',onClick:()=>{ setMyPos(CONFIG.demoCenter,false); A.map.setView(CONFIG.demoCenter,16); toast('Running without GPS'); }},{label:'Allow location',primary:true,onClick:()=>{ try { localStorage.setItem('doorboss.gps.consent','1'); } catch(e){} GPS.consent=true; startGps(); }}] });
+    actions:[{label:'Not now',onClick:()=>{ noFixView(); toast('Running without GPS'); }},{label:'Allow location',primary:true,onClick:()=>{ try { localStorage.setItem('doorboss.gps.consent','1'); } catch(e){} GPS.consent=true; startGps(); }}] });
 }
 function startGps(){
-  if (!('geolocation' in navigator)){ setMyPos(CONFIG.demoCenter,false); updateTrackPill(); return; }
+  if (!('geolocation' in navigator)){ noFixView(); updateTrackPill(); return; }
   let got=false;
-  const fail = (err) => { if (!got){ setMyPos(CONFIG.demoCenter,false); A.map.setView(CONFIG.demoCenter,16); GPS.on=false; updateTrackPill(err && err.code===1 ? 'denied' : 'unavailable'); } };
+  const fail = (err) => { if (!got){ noFixView(); GPS.on=false; updateTrackPill(err && err.code===1 ? 'denied' : 'unavailable'); } };
   try {
     if (GPS.watchId!=null) navigator.geolocation.clearWatch(GPS.watchId);
     GPS.watchId = navigator.geolocation.watchPosition(pos => {
