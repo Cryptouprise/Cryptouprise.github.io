@@ -414,6 +414,7 @@ const CONFIG = {
   mapboxToken: '',
   mapboxSat: 'https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/256/{z}/{x}/{y}?access_token={token}',
   defaultBasemap: 'streets',                   // 'streets' | 'satellite' — reps usually flip to satellite once they're on a street
+  apiBase: '/api',                            // production data layer reads this; set to 'https://portal.example.com/api' when the app is hosted elsewhere
   vapidPublicKey: '',                        // set from the backend (AI-STUDIO-BUILD stage 11) to enable real push
   noServiceWorker: false,                     // the shared preview sets this automatically when registration fails
   heartbeatMs: 20000,
@@ -652,7 +653,7 @@ function seedDemo(){
    Offline: writes are queued in localStorage and replayed in order with client_id idempotency.
    ============================================================ */
 const DB = (() => {
-  const BASE = '/api';
+  const BASE = (typeof CONFIG!=='undefined' && CONFIG.apiBase) || '/api';
   const QKEY = 'doorboss.queue.v1';
   const CKEY = 'doorboss.cache.v1';
   let cache = { props:[], terrs:[], users:[], knocks:[], positions:[], me:null, goals:null, settings:null, propsSince:null };
@@ -663,7 +664,10 @@ const DB = (() => {
   function saveCache(){ try { localStorage.setItem(CKEY, JSON.stringify({ props:cache.props, terrs:cache.terrs, users:cache.users, me:cache.me, goals:cache.goals, settings:cache.settings, propsSince:cache.propsSince })); } catch(e){} }
 
   async function api(method, path, body){
-    const r = await fetch(BASE + path, { method, headers: body ? { 'Content-Type':'application/json' } : {}, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin' });
+    const headers = body ? { 'Content-Type':'application/json' } : {};
+    let token = null; try { token = localStorage.getItem('doorboss.token'); } catch(e){}
+    if (token) headers['Authorization'] = 'Bearer ' + token;          // set when the app runs on a different origin than the API (iframe / separate host)
+    const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin' });
     if (!r.ok){ let msg = r.statusText; try { msg = (await r.json()).error || msg; } catch(e){} throw new Error(`${method} ${path}: ${r.status} ${msg}`); }
     return r.status===204 ? null : r.json();
   }

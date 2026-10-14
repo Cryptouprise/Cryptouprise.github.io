@@ -414,6 +414,7 @@ const CONFIG = {
   mapboxToken: '',
   mapboxSat: 'https://api.mapbox.com/styles/v1/mapbox/satellite-streets-v12/tiles/256/{z}/{x}/{y}?access_token={token}',
   defaultBasemap: 'streets',                   // 'streets' | 'satellite' — reps usually flip to satellite once they're on a street
+  apiBase: '/api',                            // production data layer reads this; set to 'https://portal.example.com/api' when the app is hosted elsewhere
   vapidPublicKey: '',                        // set from the backend (AI-STUDIO-BUILD stage 11) to enable real push
   noServiceWorker: false,                     // the shared preview sets this automatically when registration fails
   heartbeatMs: 20000,
