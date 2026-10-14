@@ -650,6 +650,7 @@ function seedDemo(){
    DATA LAYER (local/demo). Production: replace with data-layer.backend.js
    Same method names, same shapes. Everything returns a Promise.
    ============================================================ */
+CONFIG.demo = true;   // sample data: the map opens on the demo neighbourhood instead of fitting the list
 const DB = (() => {
   const KEY = 'doorboss.v1';
   let st = null;
@@ -800,6 +801,24 @@ const isKnockable = p => {
 
 async function reload(){
   [A.me, A.users, A.props, A.knocks, A.appts, A.terrs, A.positions, A.goals, A.settings] = await Promise.all([DB.currentUser(), DB.listUsers(), DB.listProperties(), DB.listKnocks(), DB.listAppointments(), DB.listTerritories(), DB.listPositions(), DB.getGoals(), DB.getSettings()]);
+  normalizeData();
+}
+/* A backend that drifts from the contract (status 'uncontacted', tier 'Verified Orphaned', numbers as strings)
+   must not blank the map. Coerce to the app's vocabulary and say so once in the console. */
+const STATUS_ALIASES = { uncontacted:'unknocked', new:'unknocked', untouched:'unknocked', open:'unknocked', not_knocked:'unknocked', no_answer:'not_home', nothome:'not_home', 'not-home':'not_home', call_back:'callback', 'call-back':'callback', follow_up:'callback', followup:'callback', appt:'appointment', appointment_set:'appointment', booked:'appointment', closed:'signed', sold:'signed', won:'signed', not_int:'not_interested', 'not-interested':'not_interested', no:'not_interested', dnk:'do_not_knock', do_not_contact:'do_not_knock', dnc:'do_not_knock' };
+function normStatus(s){ if (!s) return 'unknocked'; const k = String(s).trim().toLowerCase().replace(/\s+/g,'_'); if (S[k]) return k; return STATUS_ALIASES[k] || 'unknocked'; }
+function normTier(t){ if (!t) return 'none'; const k = String(t).trim().toLowerCase(); if (TIERS[k]) return k; if (/uninstall|no panel|no_panel|never install/.test(k)) return 'verified_uninstalled'; if (/install|orphan|verified|panels/.test(k)) return 'verified_installed'; if (/permit/.test(k)) return 'permit_only'; return 'none'; }
+function normalizeData(){
+  let fixed = 0;
+  for (const p of A.props){
+    const st = normStatus(p.status); if (st !== p.status){ p.status = st; fixed++; }
+    const tier = normTier(p.tier); if (tier !== p.tier){ p.tier = tier; fixed++; }
+    if (p.installer_status && p.installer_status !== 'bankrupt'){ if (/bankrupt|closed|orphan|out of business|defunct/i.test(p.installer_status)) p.installer_status = 'bankrupt'; }
+    if (typeof p.lat === 'string') p.lat = parseFloat(p.lat); if (typeof p.lng === 'string') p.lng = parseFloat(p.lng);
+    for (const k of ['last_knock_at','callback_at','appointment_at','created_at']) if (typeof p[k] === 'string') p[k] = new Date(p[k]).getTime();
+  }
+  for (const k of A.knocks){ const st = normStatus(k.status); if (st !== k.status){ k.status = st; fixed++; } for (const f of ['created_at','callback_at','appointment_at']) if (typeof k[f] === 'string') k[f] = new Date(k[f]).getTime(); }
+  if (fixed && !A._normWarned){ A._normWarned = true; console.warn(`DoorBoss: normalized ${fixed} field(s) from the backend to the app vocabulary (status/tier). Fix the data so this stops.`); }
 }
 const apptOf = p => p && p.appointment_id ? byId(A.appts, p.appointment_id) : null;
 const APPT_LABEL = { scheduled:'Scheduled', confirmed:'Confirmed', held:'Held', no_show:'No-show', rescheduled:'Rescheduled', cancelled:'Cancelled' };
@@ -913,10 +932,23 @@ const StreetLayer = L.Layer.extend({
   },
   invalidate(){ this._cache=null; if (this._map) this._redraw(); }
 });
+/* Where the map opens. Real data: fit the rep's territory (or the whole list) so the first screen is doors, not an empty block.
+   Demo: the sample neighbourhood. Either way the first GPS fix recentres on the rep if they have not touched the map (see setMyPos). */
+function startView(map){
+  const pts = (A.props||[]).filter(p => isFinite(p.lat) && isFinite(p.lng));
+  if (pts.length) A.dataBounds = L.latLngBounds(pts.map(p => [p.lat, p.lng]));   // GPS recentre only happens near the list
+  if (!pts.length || CONFIG.demo){ map.setView(CONFIG.demoCenter, 16); return; }
+  const mine = A.me ? pts.filter(inMyTerr) : [];
+  const use = mine.length ? mine : pts;
+  const b = L.latLngBounds(use.map(p => [p.lat, p.lng]));
+  if (use.length === 1) map.setView(b.getCenter(), 17);
+  else map.fitBounds(b.pad(0.08), { maxZoom:17, animate:false });
+}
 function initMap(){
   const map = L.map('map', { preferCanvas:true, zoomControl:false, attributionControl:false, tap:false });
   A.map = map;
-  map.setView(CONFIG.demoCenter, 16);
+  startView(map);
+  map.on('dragstart', () => { A.userMoved = true; });
   A.tiles = L.tileLayer(CONFIG.tiles, { maxZoom:19, crossOrigin:true });
   A.sat = L.tileLayer(CONFIG.mapboxToken ? CONFIG.mapboxSat.replace('{token}', CONFIG.mapboxToken) : CONFIG.satTiles, { maxZoom: CONFIG.mapboxToken ? 20 : 19, crossOrigin:true });
   A.basemap = CONFIG.defaultBasemap; try { const b=localStorage.getItem('doorboss.basemap'); if (b==='streets'||b==='satellite') A.basemap=b; } catch(e){}
@@ -1808,6 +1840,12 @@ function setMyPos(ll, fromGps, meta){
     const last=GPS.trail[GPS.trail.length-1]; if (!last || haversine(last.ll, ll) > 8) { GPS.trail.push({ ll, at:now(), acc:meta.acc }); if (GPS.trail.length>2000) GPS.trail.shift(); }
   }
   renderMeMarker(); updateNext(); updateTrackPill();
+  // first real fix: bring the rep to where they stand, unless they already moved the map or the list is somewhere else entirely
+  if (fromGps && !A.centeredOnMe && A.map){
+    A.centeredOnMe = true;
+    const near = !A.dataBounds || A.dataBounds.pad(1.0).contains(L.latLng(ll));
+    if (!A.userMoved && near) A.map.setView(ll, Math.max(A.map.getZoom(), 17));
+  }
 }
 function gpsConsentThenStart(){
   let ok=false; try { ok = localStorage.getItem('doorboss.gps.consent')==='1'; } catch(e){}
