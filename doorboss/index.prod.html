@@ -1798,7 +1798,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v3 (tap-switch + satellite fix).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v4 (stays on territory when you are away from it).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -1921,7 +1921,7 @@ function startGps(){
       if (c.accuracy > 150){ GPS.badFixes++; if (GPS.badFixes < 3) return; }          // ignore a couple of wild fixes (cell-tower)
       GPS.badFixes=0; got=true; GPS.on=true;
       setMyPos([c.latitude,c.longitude], true, { acc:c.accuracy, heading:c.heading, speed:c.speed });
-      if (!A.centered){ A.centered=true; A.map.setView(A.myPos,17); }
+      if (!A.centered){ A.centered=true; const near = A.props.some(p => haversine(A.myPos,[p.lat,p.lng]) < 1200); if (near) A.map.setView(A.myPos,17); else if (A.props.length) { const b=L.latLngBounds((A.me && myTerrs().length ? A.props.filter(inMyTerr) : A.props).map(p=>[p.lat,p.lng])); A.map.fitBounds(b.pad(0.08),{maxZoom:17,animate:false}); toast('You are '+fmtDist(Math.min(...A.props.map(p=>haversine(A.myPos,[p.lat,p.lng]))))+' from your nearest door. Showing the territory.'); } else A.map.setView(A.myPos,17); }
     }, fail, { enableHighAccuracy:true, maximumAge:3000, timeout:15000 });
     setTimeout(()=>{ if (!got) fail(null); }, 16000);
   } catch(e){ fail(e); }
