@@ -797,7 +797,7 @@ const DB = (() => {
    ============================================================ */
 const A = {
   me:null, users:[], props:[], knocks:[], appts:[], terrs:[], positions:[], goals:null, settings:null,
-  view:'map', filter:'knockable', mine:true, showReps:true,
+  view:'map', filter:'all', mine:true, showReps:true,   // 'all' by default: a house you just knocked must stay on the map in its new color ('Knock next' hides it)
   myPos:null, gpsOk:false, map:null, markers:new Map(), terrLayers:new Map(), repLayers:new Map(), meMarker:null, streetLayer:null,
   tiles:null, schematic:false, draw:null, sheetProp:null, pendingStatus:null,
   teamTab:'board', period:'week', boardMetric:'knocks', online:navigator.onLine,
@@ -1798,7 +1798,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v4 (stays on territory when you are away from it).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v5 (knocked houses stay on the map in their new color).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
