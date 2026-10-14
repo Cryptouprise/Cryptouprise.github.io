@@ -27,7 +27,7 @@ img{max-width:100%}
   --good:#15a35a; --warn:#e0a800; --bad:#d64545;
   --map-bg:#e6eaee; --map-line:#cdd5dc; --map-block:#f3f5f7;
   /* status */
-  --s-unknocked:#8a97a3; --s-not_home:#e0a800; --s-callback:#7c5cff; --s-interested:#2b7fff;
+  --s-unknocked:#7b8794; --s-not_home:#e0a800; --s-callback:#7c5cff; --s-interested:#2b7fff;
   --s-appointment:#15a35a; --s-signed:#0b7a68; --s-not_interested:#d64545; --s-do_not_knock:#3a434c;
   /* type */
   --font-display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
@@ -333,6 +333,19 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 .seg button.on{font-weight:700}
 .tabbar .tab.on svg{stroke-width:2.4}
 .fab{transition:transform .08s}.fab:active{transform:scale(.94)}
+
+/* ---------- production polish: next-door ring, pin labels, sign-in wall ---------- */
+@keyframes nextPulse{0%{stroke-opacity:.95}50%{stroke-opacity:.3}100%{stroke-opacity:.95}}
+.next-ring{animation:nextPulse 1.6s ease-in-out infinite}
+.leaflet-tooltip{position:absolute;white-space:nowrap;pointer-events:none}
+.leaflet-tooltip.pin-label{background:rgba(255,255,255,.9);border:0;border-radius:4px;padding:1px 4px;font:600 11px/1.2 var(--font-body);color:#1b2430;box-shadow:0 1px 2px rgba(0,0,0,.3)}
+:root[data-theme="dark"] .leaflet-tooltip.pin-label{background:rgba(23,31,38,.9);color:#e9eef2}
+.leaflet-tooltip.pin-label::before{display:none}
+.authwall{position:fixed;inset:0;z-index:2000;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px}
+.authwall .box{width:min(380px,100%);background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow)}
+.authwall .brand{display:flex;align-items:center;gap:8px;font-family:var(--font-display);font-weight:700;font-size:22px}
+.authwall .brand .dot{width:14px;height:14px;border-radius:50%;background:var(--accent)}
+.authwall h2{margin:4px 0 0;font-size:20px}.authwall p{margin:0;color:var(--muted)}.authwall .small{font-size:11px;word-break:break-all}
 </style>
 </head>
 <body>
@@ -407,7 +420,11 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 const CONFIG = {
   appName: 'DoorBoss',
   demoCenter: [39.6975, -104.8262],          // Aurora, CO
-  tiles: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  // Streets: Esri World Street Map — clean, keyless, built for app traffic, same host as the satellite layer. (OSM's own tile server blocks apps at team scale.)
+  tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+  tilesAttribution: '© Esri, HERE, Garmin, OpenStreetMap contributors',
+  tilesFallback: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',                        // only if the host blocks arcgisonline
+  mapboxStreets: 'https://api.mapbox.com/styles/v1/mapbox/streets-v12/tiles/256/{z}/{x}/{y}?access_token={token}',   // used instead when mapboxToken is set
   // Satellite: Esri World Imagery needs no key (attribution required). Set mapboxToken for Mapbox Satellite Streets (sharper, labels on top, 50k loads/mo free).
   satTiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
   satAttribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
@@ -949,13 +966,21 @@ function initMap(){
   A.map = map;
   startView(map);
   map.on('dragstart', () => { A.userMoved = true; });
-  A.tiles = L.tileLayer(CONFIG.tiles, { maxZoom:19, crossOrigin:true });
+  A.tiles = L.tileLayer(CONFIG.mapboxToken ? CONFIG.mapboxStreets.replace('{token}', CONFIG.mapboxToken) : CONFIG.tiles, { maxZoom:19, crossOrigin:true });
   A.sat = L.tileLayer(CONFIG.mapboxToken ? CONFIG.mapboxSat.replace('{token}', CONFIG.mapboxToken) : CONFIG.satTiles, { maxZoom: CONFIG.mapboxToken ? 20 : 19, crossOrigin:true });
   A.basemap = CONFIG.defaultBasemap; try { const b=localStorage.getItem('doorboss.basemap'); if (b==='streets'||b==='satellite') A.basemap=b; } catch(e){}
-  let swapped=false;
-  const onErr = () => { if (swapped) return; swapped=true; A.schematic=true; if (map.hasLayer(A.tiles)) map.removeLayer(A.tiles); if (map.hasLayer(A.sat)) map.removeLayer(A.sat); new Schematic({ tileSize:256, maxZoom:19 }).addTo(map); A.streetLayer = new StreetLayer().addTo(map); setMapNote('Preview map: streets and houses drawn from the list. Production shows real street tiles and satellite.'); map.setView(map.getCenter(), Math.max(map.getZoom(),17)); filterChips(); };
+  let swapped=false, fellBack=false;
+  const onErr = () => {
+    if (swapped) return;
+    if (!fellBack && CONFIG.tilesFallback){            // CARTO blocked → plain OSM before giving up on real tiles
+      fellBack=true; const was = map.hasLayer(A.tiles); A.tiles.off('tileerror', onErr); A.tiles.off('load'); if (was) map.removeLayer(A.tiles);
+      A.tiles = L.tileLayer(CONFIG.tilesFallback, { maxZoom:19, crossOrigin:true }); A.tiles.on('tileerror', onErr);
+      A.tiles.on('load', () => { if (!swapped && A.basemap==='streets') setMapNote('© OpenStreetMap contributors', true); });
+      if (was) A.tiles.addTo(map); return;
+    }
+    swapped=true; A.schematic=true; if (map.hasLayer(A.tiles)) map.removeLayer(A.tiles); if (map.hasLayer(A.sat)) map.removeLayer(A.sat); new Schematic({ tileSize:256, maxZoom:19 }).addTo(map); A.streetLayer = new StreetLayer().addTo(map); setMapNote('Preview map: streets and houses drawn from the list. Production shows real street tiles and satellite.'); map.setView(map.getCenter(), Math.max(map.getZoom(),17)); filterChips(); };
   A.tiles.on('tileerror', onErr); A.sat.on('tileerror', onErr);
-  A.tiles.on('load', () => { if (!swapped && A.basemap==='streets') setMapNote('© OpenStreetMap contributors', true); });
+  A.tiles.on('load', () => { if (!swapped && A.basemap==='streets') setMapNote(CONFIG.mapboxToken ? '© Mapbox © OpenStreetMap' : (CONFIG.tilesAttribution || '© OpenStreetMap contributors'), true); });
   A.sat.on('load', () => { if (!swapped && A.basemap==='satellite') setMapNote(CONFIG.mapboxToken ? '© Mapbox © Maxar' : CONFIG.satAttribution, true); });
   (A.basemap==='satellite' ? A.sat : A.tiles).addTo(map);
   map.on('contextmenu', e => showCtx(e));
@@ -965,7 +990,7 @@ function initMap(){
   $('#fabLocate').onclick = () => { if (A.myPos) map.setView(A.myPos, Math.max(map.getZoom(),17)); else toast('No position yet'); };
   $('#fabAdd').onclick = () => { if (!A.myPos) return toast('No position yet'); openAddHouse(A.myPos); };
   $('#fabRoute').onclick = () => { if (A.route) { confirmBox('End route?', `${A.route.plan.length-A.route.i} doors left on it.`, endRoute, 'End route'); } else startRoute(); };
-  map.on('zoomend', renderPins);
+  map.on('zoomend', () => { renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
@@ -1011,9 +1036,9 @@ function visibleProps(){
 function pinStyle(p){
   const css=getComputedStyle(document.documentElement); const s=S[p.status]||S.unknocked; const col=css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888';
   const big = p.status==='appointment'||p.status==='signed'||p.status==='callback';
-  const z = A.map ? A.map.getZoom() : 16; const base = z>=18?9: z>=17?7: z>=16?6:4;
+  const z = A.map ? A.map.getZoom() : 16; const base = z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4;
   const dark = document.documentElement.getAttribute('data-theme')==='dark' || (document.documentElement.getAttribute('data-theme')!=='light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
-  return { radius: big?base+2:base, fillColor:col, color: (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: A.basemap==='satellite'?2.5:1.5, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
+  return { radius: big?base+2:base, fillColor:col, color: (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
 }
 const CLUSTER_ZOOM = 15;
 function renderClusters(list){
@@ -1027,7 +1052,7 @@ function renderClusters(list){
     const m = L.marker([lat,lng], { icon }); m.on('click', () => A.map.setView([lat,lng], Math.min(17, z+2))); A.clusterLayer.addLayer(m); }
 }
 function renderPins(){
-  const list = visibleProps();
+  const list = visibleProps(); const z = A.map.getZoom();
   if (A.map.getZoom() < CLUSTER_ZOOM && list.length > 60){ for (const [id,m] of A.markers){ if (A.map.hasLayer(m)) A.map.removeLayer(m); } renderClusters(list); return; }
   if (A.clusterLayer) A.clusterLayer.clearLayers();
   const vis = new Set(list.map(p=>p.id));
@@ -1038,7 +1063,14 @@ function renderPins(){
     if (!m){ m = L.circleMarker([p.lat,p.lng], st); m.on('click', () => openSheet(p.id)); A.markers.set(p.id, m); }
     else { m.setStyle(st); m.setRadius(st.radius); m.setLatLng([p.lat,p.lng]); }
     if (!A.map.hasLayer(m)) m.addTo(A.map);
+    labelPin(m, p, z);
   }
+}
+/* house number beside the pin once the rep is at street level — the basemap does not draw them */
+function labelPin(m, p, z){
+  const want = z >= 18;
+  if (want && !m.getTooltip()){ const num = String(p.address||'').trim().split(/\s+/)[0]; if (/^\d/.test(num)) m.bindTooltip(num, { permanent:true, direction:'right', offset:[6,0], className:'pin-label', interactive:false }); }
+  else if (!want && m.getTooltip()) m.unbindTooltip();
 }
 function renderTerritories(){
   if (A.streetLayer) A.streetLayer.invalidate();
@@ -1094,13 +1126,21 @@ function updateNext(){
   const nearest = arr => arr.map(p => ({p, d:haversine(A.myPos,[p.lat,p.lng])})).sort((a,b)=>a.d-b.d)[0];
   if (due.length){ const n=nearest(due); pickP=n.p; why='Callback due · '+fmtDist(n.d); }
   else { const kn = cand.filter(isKnockable); const n=nearest(kn); if (n){ pickP=n.p; why=(S[n.p.status].label)+' · '+fmtDist(n.d); } }
-  if (!pickP){ card.hidden=true; A.nextId=null; return; }
-  A.nextId=pickP.id; card.hidden=false;
+  if (!pickP){ card.hidden=true; A.nextId=null; drawNextRing(null); return; }
+  A.nextId=pickP.id; card.hidden=false; drawNextRing(pickP);
   $('#nextSw').style.background = S[pickP.status].color;
   $('#nextT').textContent = pickP.address;
   $('#nextS').textContent = why + ' · ' + pickP.installer + ' · ' + (TIERS[pickP.tier]||TIERS.none).short;
 }
 
+function drawNextRing(p){
+  if (A.nextRing){ A.map.removeLayer(A.nextRing); A.nextRing=null; }
+  if (!p || !A.map) return;
+  const z=A.map.getZoom(); const r = (z>=18?11: z>=17?9: z>=16?7:5.5) + 7;
+  if (!A.svgRenderer) A.svgRenderer = L.svg({ padding:0.5 });   // SVG so the CSS pulse works (pins stay on canvas for speed)
+  A.nextRing = L.circleMarker([p.lat,p.lng], { renderer:A.svgRenderer, radius:r, color:'#f05a1a', weight:3, fill:false, opacity:.95, interactive:false, className:'next-ring' }).addTo(A.map);
+  if (A.nextRing.bringToBack) A.nextRing.bringToBack();
+}
 /* context menu (long-press) */
 function showCtx(e){
   if (A.draw) return;
@@ -1968,8 +2008,15 @@ function reminderTick(){
 /* ============================================================
    BOOT
    ============================================================ */
+function showAuthWall(err){
+  const msg = /401|403|Unauthorized|Forbidden/.test(String(err && err.message)) ? 'Your session has expired or you are not signed in.' : 'Could not reach the server. Check your connection and try again.';
+  document.body.insertAdjacentHTML('beforeend', `<div class="authwall"><div class="box"><div class="brand"><span class="dot"></span>${esc(CONFIG.appName)}</div><h2>Sign in to start knocking</h2><p>${msg}</p><button class="btn primary" id="authGo">Sign in</button><button class="btn" id="authRetry">Try again</button><div class="muted small">${esc(String(err && err.message || ''))}</div></div></div>`);
+  $('#authGo').onclick = () => { try { localStorage.removeItem('doorboss.token'); } catch(e){} const u = location.pathname.replace(/\/api\/doors-app.*$/, '') + '/doors'; try { (window.top || window).location.href = u; } catch(e){ location.href = u; } };
+  $('#authRetry').onclick = () => location.reload();
+}
 async function start(snap){
-  await DB.init(); await reload();
+  try { await DB.init(); } catch(e){ console.error('DoorBoss boot failed:', e); showAuthWall(e); return; }
+  await reload();
   initMap(); applyRole(); gpsConsentThenStart();
   await updateSyncPill();
   if (snap && snap.repId) A.repId = snap.repId;
