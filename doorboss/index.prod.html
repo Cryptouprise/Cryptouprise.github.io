@@ -1326,6 +1326,7 @@ function renderSheet(){
           <div id="apResult" hidden><div class="eyebrow" style="margin-bottom:6px">How did it go?</div><div class="quick"><button data-res="signed">Signed</button><button data-res="follow_up">Needs follow-up</button><button data-res="lost">Lost</button></div></div>
           <div id="apWhen" hidden><input type="datetime-local" id="apWhenInput"><button class="btn sm primary" id="apWhenSave" style="margin-top:6px">Save new time</button></div>
         </div>`; })()}
+      ${sel==='appointment'||apptOf(p)?'':`<button class="btn primary block" id="bookAppt">📅 Book appointment · pick a day &amp; time</button>`}
       <div>
         <div class="eyebrow" style="margin-bottom:8px">Log this door</div>
         <div class="status-grid">
@@ -1345,6 +1346,7 @@ function renderSheet(){
   $('#sheetClose').onclick = closeSheet;
   $$('[data-copy]',el).forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{ A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
+  const ba=$('#bookAppt'); if (ba) ba.onclick=()=>{ A.pendingStatus='appointment'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
   const qw=$('#quickWhen'); if (qw) qw.onclick=e=>{ const b=e.target.closest('button'); if (!b) return; let t; if (b.dataset.min) t=now()+b.dataset.min*60000; if (b.dataset.tmr){ t=startOfDay(now())+DAY+b.dataset.tmr*3600000; } if (b.dataset.days){ t=startOfDay(now())+b.dataset.days*DAY+(sel==='callback'?17:18)*3600000; } A.pendingWhen=t; $('#whenInput').value=toLocalInput(t); $$('#quickWhen button').forEach(x=>x.classList.toggle('on',x===b)); };
   const wi=$('#whenInput'); if (wi) wi.onchange=()=>{ A.pendingWhen = wi.value ? new Date(wi.value).getTime() : null; };
   $('#saveKnock').onclick = saveKnock;
@@ -1798,7 +1800,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v5 (knocked houses stay on the map in their new color).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v6 (Book appointment button on every house).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
