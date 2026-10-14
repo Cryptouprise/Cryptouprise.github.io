@@ -200,7 +200,7 @@ label.f{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:60
 .sub-tabs::-webkit-scrollbar{display:none}
 .sub-tabs button{flex:none;height:34px;padding:0 12px;border-radius:999px;font-weight:600;font-size:13px;color:var(--muted);background:var(--surface);border:1px solid var(--line)}
 .sub-tabs button.on{background:var(--fg);color:var(--bg);border-color:var(--fg)}
-table.tbl{width:100%;border-collapse:collapse;font-size:13px}
+table.tbl{width:100%;border-collapse:collapse;font-size:13px;display:block;overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}   /* 8-column stats table swipes sideways on a phone instead of spilling off the card */
 table.tbl th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;padding:6px 6px;border-bottom:1px solid var(--line)}
 table.tbl td{padding:8px 6px;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums;white-space:nowrap}
 table.tbl td.n,table.tbl th.n{text-align:right}
