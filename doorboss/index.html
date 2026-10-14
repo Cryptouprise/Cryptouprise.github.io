@@ -969,16 +969,29 @@ function initMap(){
   A.tiles = L.tileLayer(CONFIG.mapboxToken ? CONFIG.mapboxStreets.replace('{token}', CONFIG.mapboxToken) : CONFIG.tiles, { maxZoom:19, crossOrigin:true });
   A.sat = L.tileLayer(CONFIG.mapboxToken ? CONFIG.mapboxSat.replace('{token}', CONFIG.mapboxToken) : CONFIG.satTiles, { maxZoom: CONFIG.mapboxToken ? 20 : 19, crossOrigin:true });
   A.basemap = CONFIG.defaultBasemap; try { const b=localStorage.getItem('doorboss.basemap'); if (b==='streets'||b==='satellite') A.basemap=b; } catch(e){}
-  let swapped=false, fellBack=false;
+  // 2026-10-14: one failed tile used to flip the whole map to the schematic grid for the rest of the session
+  // (ad-blocker, a 429 from Esri, a dropped packet on a phone) and lock the Satellite button. Now: only fall back
+  // when NO real tile has ever loaded and several have failed (or 8 s pass with nothing). After any tile loads,
+  // errors are just gaps that refill on the next pan.
+  let swapped=false, fellBack=false, loadedAny=false, errCount=0;
+  const noteLoaded = () => { loadedAny = true; };
   const onErr = () => {
-    if (swapped) return;
-    if (!fellBack && CONFIG.tilesFallback){            // CARTO blocked → plain OSM before giving up on real tiles
-      fellBack=true; const was = map.hasLayer(A.tiles); A.tiles.off('tileerror', onErr); A.tiles.off('load'); if (was) map.removeLayer(A.tiles);
-      A.tiles = L.tileLayer(CONFIG.tilesFallback, { maxZoom:19, crossOrigin:true }); A.tiles.on('tileerror', onErr);
+    if (swapped || loadedAny) return;
+    errCount++;
+    if (!fellBack && CONFIG.tilesFallback){            // primary host blocked → plain OSM before giving up on real tiles
+      fellBack=true; errCount=0; const was = map.hasLayer(A.tiles); A.tiles.off('tileerror', onErr); A.tiles.off('tileload', noteLoaded); A.tiles.off('load'); if (was) map.removeLayer(A.tiles);
+      A.tiles = L.tileLayer(CONFIG.tilesFallback, { maxZoom:19, crossOrigin:true }); A.tiles.on('tileerror', onErr); A.tiles.on('tileload', noteLoaded);
       A.tiles.on('load', () => { if (!swapped && A.basemap==='streets') setMapNote('© OpenStreetMap contributors', true); });
       if (was) A.tiles.addTo(map); return;
     }
+    if (errCount < 6) return;
+    goSchematic();
+  };
+  const goSchematic = () => {
+    if (swapped || loadedAny) return;
     swapped=true; A.schematic=true; if (map.hasLayer(A.tiles)) map.removeLayer(A.tiles); if (map.hasLayer(A.sat)) map.removeLayer(A.sat); new Schematic({ tileSize:256, maxZoom:19 }).addTo(map); A.streetLayer = new StreetLayer().addTo(map); setMapNote('Preview map: streets and houses drawn from the list. Production shows real street tiles and satellite.'); map.setView(map.getCenter(), Math.max(map.getZoom(),17)); filterChips(); };
+  setTimeout(() => { if (!loadedAny && errCount > 0) goSchematic(); }, 8000);
+  A.tiles.on('tileload', noteLoaded); A.sat.on('tileload', noteLoaded);
   A.tiles.on('tileerror', onErr); A.sat.on('tileerror', onErr);
   A.tiles.on('load', () => { if (!swapped && A.basemap==='streets') setMapNote(CONFIG.mapboxToken ? '© Mapbox © OpenStreetMap' : (CONFIG.tilesAttribution || '© OpenStreetMap contributors'), true); });
   A.sat.on('load', () => { if (!swapped && A.basemap==='satellite') setMapNote(CONFIG.mapboxToken ? '© Mapbox © Maxar' : CONFIG.satAttribution, true); });
