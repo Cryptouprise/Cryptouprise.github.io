@@ -221,7 +221,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 
 /* ---------- sheet ---------- */
-.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.35);z-index:1200;opacity:0;transition:opacity .2s;cursor:pointer;touch-action:manipulation}
+.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.18);z-index:1200;opacity:0;transition:opacity .2s;pointer-events:none}
 .backdrop.show{opacity:1}
 .sheet{position:absolute;left:0;right:0;bottom:0;max-height:88%;background:var(--surface);border-radius:18px 18px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.25);z-index:1300;transform:translateY(102%);transition:transform .25s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column}
 .sheet.show{transform:translateY(0)}
@@ -997,7 +997,7 @@ function initMap(){
   A.sat.on('load', () => { if (!swapped && A.basemap==='satellite') setMapNote(CONFIG.mapboxToken ? '© Mapbox © Maxar' : CONFIG.satAttribution, true); });
   (A.basemap==='satellite' ? A.sat : A.tiles).addTo(map);
   map.on('contextmenu', e => showCtx(e));
-  map.on('click', e => { if (A.draw) drawAdd(e.latlng); else hideCtx(); });
+  map.on('click', e => { if (A.draw) drawAdd(e.latlng); else { hideCtx(); if (A.sheetProp && Date.now() - (A.pinClickAt||0) > 300) closeSheet(); } });
   map.on('movestart', hideCtx);
   renderTerritories(); renderPins(); renderReps(); updateNext();
   $('#fabLocate').onclick = () => { if (A.myPos) map.setView(A.myPos, Math.max(map.getZoom(),17)); else toast('No position yet'); };
@@ -1073,7 +1073,7 @@ function renderPins(){
     let m = A.markers.get(p.id);
     if (!vis.has(p.id)){ if (m){ A.map.removeLayer(m); } continue; }
     const st = pinStyle(p);
-    if (!m){ m = L.circleMarker([p.lat,p.lng], st); m.on('click', () => openSheet(p.id)); A.markers.set(p.id, m); }
+    if (!m){ m = L.circleMarker([p.lat,p.lng], st); m.on('click', () => { A.pinClickAt = Date.now(); openSheet(p.id); }); A.markers.set(p.id, m); }
     else { m.setStyle(st); m.setRadius(st.radius); m.setLatLng([p.lat,p.lng]); }
     if (!A.map.hasLayer(m)) m.addTo(A.map);
     labelPin(m, p, z);
