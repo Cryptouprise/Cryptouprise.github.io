@@ -221,7 +221,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
 
 /* ---------- sheet ---------- */
-.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.35);z-index:1200;opacity:0;transition:opacity .2s}
+.backdrop{position:absolute;inset:0;background:rgba(0,0,0,.35);z-index:1200;opacity:0;transition:opacity .2s;cursor:pointer;touch-action:manipulation}
 .backdrop.show{opacity:1}
 .sheet{position:absolute;left:0;right:0;bottom:0;max-height:88%;background:var(--surface);border-radius:18px 18px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.25);z-index:1300;transform:translateY(102%);transition:transform .25s cubic-bezier(.2,.8,.2,1);display:flex;flex-direction:column}
 .sheet.show{transform:translateY(0)}
@@ -1283,7 +1283,10 @@ function openSheet(id){
   renderSheet(); $('#backdrop').hidden=false; requestAnimationFrame(()=>{ $('#backdrop').classList.add('show'); $('#sheet').classList.add('show'); });
 }
 function closeSheet(){ $('#backdrop').classList.remove('show'); $('#sheet').classList.remove('show'); setTimeout(()=>{ $('#backdrop').hidden=true; },220); A.sheetProp=null; }
-$('#backdrop').onclick = closeSheet;
+$('#backdrop').onclick = closeSheet; $('#backdrop').addEventListener('touchend', e => { e.preventDefault(); closeSheet(); }, { passive:false });
+document.addEventListener('keydown', e => { if (e.key==='Escape' && A.sheetProp) closeSheet(); });
+/* swipe the handle down to close (iOS taps on the dim area were unreliable) */
+(() => { const h=$('#sheet .handle'); let y0=null; h.addEventListener('touchstart', e => { y0=e.touches[0].clientY; }, { passive:true }); h.addEventListener('touchend', e => { if (y0!=null && e.changedTouches[0].clientY - y0 > 30) closeSheet(); y0=null; }, { passive:true }); h.addEventListener('click', closeSheet); })();
 function renderSheet(){
   const p=A.sheetProp; const hist=A.knocks.filter(k=>k.property_id===p.id).sort((a,b)=>b.created_at-a.created_at);
   const tier=TIERS[p.tier]||TIERS.none; const dist = A.myPos ? haversine(A.myPos,[p.lat,p.lng]) : null;
@@ -1295,7 +1298,7 @@ function renderSheet(){
     <div class="stack">
       <div class="row between" style="align-items:flex-start">
         <div style="min-width:0"><h2>${esc(p.address)}</h2><div class="muted" style="font-size:13px">${esc([p.city,p.zip].filter(Boolean).join(' '))}${dist!=null?' · '+fmtDist(dist):''}${p.territory_id?' · '+esc((byId(A.terrs,p.territory_id)||{}).name||''):''}</div></div>
-        ${statusChip(p.status)}
+        <div class="row" style="gap:6px;flex:none">${statusChip(p.status)}<button class="back" id="sheetClose" aria-label="Close" style="padding:0 10px">Close</button></div>
       </div>
       <div class="row" style="flex-wrap:wrap;gap:6px">
         ${p.installer_status==='bankrupt'?`<span class="tag bad">Bankrupt</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
@@ -1339,6 +1342,7 @@ function renderSheet(){
       <button class="btn primary block" id="saveKnock" ${sel?'':'disabled'}>${sel? 'Save · '+esc(S[sel].label) : 'Pick an outcome'}</button>
       ${hist.length?`<div><div class="eyebrow" style="margin-bottom:8px">History · ${hist.length} knock${hist.length===1?'':'s'}</div><div class="hist">${hist.slice(0,8).map(k=>`<div class="h"><b>${esc(S[k.status].label)}</b> <span class="muted">· ${esc(userName(k.user_id))} · ${fmtDT(k.created_at)}</span>${k.note?`<div class="muted">${esc(k.note)}</div>`:''}${(k.photos&&k.photos.length)||k.photo_url?`<div class="photo-row" style="margin-top:4px">${(k.photos||[k.photo_url]).map(u=>`<img src="${u}" alt="Door photo">`).join('')}</div>`:''}</div>`).join('')}</div></div>`:`<div class="muted" style="font-size:13px">No knocks yet. ${tier.note?esc(tier.note):''}</div>`}
     </div>`;
+  $('#sheetClose').onclick = closeSheet;
   $$('[data-copy]',el).forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{ A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
   const qw=$('#quickWhen'); if (qw) qw.onclick=e=>{ const b=e.target.closest('button'); if (!b) return; let t; if (b.dataset.min) t=now()+b.dataset.min*60000; if (b.dataset.tmr){ t=startOfDay(now())+DAY+b.dataset.tmr*3600000; } if (b.dataset.days){ t=startOfDay(now())+b.dataset.days*DAY+(sel==='callback'?17:18)*3600000; } A.pendingWhen=t; $('#whenInput').value=toLocalInput(t); $$('#quickWhen button').forEach(x=>x.classList.toggle('on',x===b)); };
