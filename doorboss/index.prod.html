@@ -33,8 +33,8 @@ img{max-width:100%}
   --good:#15a35a; --warn:#e0a800; --bad:#d64545;
   --map-bg:#e6eaee; --map-line:#cdd5dc; --map-block:#f3f5f7;
   /* status */
-  --s-unknocked:#7b8794; --s-not_home:#e0a800; --s-callback:#7c5cff; --s-interested:#2b7fff;
-  --s-appointment:#15a35a; --s-signed:#0b7a68; --s-not_interested:#d64545; --s-do_not_knock:#3a434c;
+  --s-unknocked:#7b8794; --s-not_home:#9a6f00; --s-callback:#7c5cff; --s-interested:#2b7fff;
+  --s-appointment:#14883f; --s-signed:#0b7a68; --s-not_interested:#d64545; --s-do_not_knock:#3a434c;
   /* type */
   --font-display:"Barlow Condensed","Arial Narrow",Arial,sans-serif;
   --font-body:"Barlow",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
@@ -451,7 +451,7 @@ const CONFIG = {
   reknockDays: 3,                              // "not home" becomes knockable again after N days
   onlineWindowMs: 2 * 60 * 1000,
   textTemplates: [
-    { id:'intro',    label:'Intro',    body:'Hi {first}, this is {rep} with Elite Solar Recovery. We stopped by about the solar system {installer} put on your home.{closure} Good time to talk today?' },
+    { id:'intro',    label:'Intro',    body:'Hi {first}, this is {rep} with Elite Solar Recovery. We stopped by about {what}.{closure} Good time to talk today?' },
     { id:'callback', label:'Follow-up', body:'Hi {first}, {rep} from Elite Solar Recovery. Following up like we said. Does {when} still work?' },
     { id:'confirm',  label:'Confirm appt', body:'Hi {first}, confirming your appointment with Elite Solar Recovery on {when}. Reply YES to confirm or let me know if you need a different time.' }
   ]
@@ -496,6 +496,18 @@ const fmtDist = m => m < 1000 ? Math.round(m)+' m' : (m/1609.34).toFixed(1)+' mi
 const pct = (a,b) => b ? Math.round(100*a/b)+'%' : '—';
 const ratio = (a,b) => b ? (a/b).toFixed(1) : '—';
 const firstName = n => (n||'').split(' ')[0] || 'there';
+/* v21: county records are written LAST FIRST ("Spendlove Emily Ann & Maxie Jason"); the demo seed is FIRST LAST. Pick the right word, skip trust words, 'there' for companies. */
+function ownerFirst(p){
+  const n = String((p && p.owner_name) || '').trim();
+  if (!n || /\b(LLC|L L C|INC|LP|CORP|CORPORATION|HOLDINGS|PROPERTIES|BANK|ASSOCIATION|CHURCH|CITY OF|COUNTY)\b/i.test(n)) return 'there';
+  if (!/open data|county/i.test(p.source || '')) return firstName(n);
+  const TW = /\b(family|revocable|living|irrevocable|trust|etal|et al|trs|co-trs|survivors?|separate|property|decedents?|estate|the|jr|sr|ii|iii|iv)\b/gi;
+  for (const part of n.split(/\s*&\s*/)){
+    const w = part.replace(TW, ' ').split(/\s+/).filter(Boolean);
+    if (w.length >= 2){ const f = w[1].length > 1 ? w[1] : (w[2] && w[2].length > 1 ? w[2] : ''); if (f) return f.charAt(0).toUpperCase() + f.slice(1).toLowerCase(); }
+  }
+  return 'there';
+}
 const toLocalInput = t => { const d = new Date(t); const p = n => String(n).padStart(2,'0'); return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes()); };
 
 function haversine(a, b){
@@ -687,6 +699,7 @@ const DB = (() => {
   let queue = [];
   let flushing = null;
   let refreshing = false, lastSentAt = 0;
+  const held = new Set();   // v21: knocks waiting out their 5-second Undo window are not sent yet
   const KKEY = 'doorboss.knocks.v1';   // recent knocks kept on the phone under their own key (a quota error can't take the houses with it)
 
   // v17: the house list (and the stamp it is current to) lives in IndexedDB as ONE record, so a stamp can never run ahead of its houses
@@ -802,7 +815,7 @@ const DB = (() => {
     async updateAppointment(id, patch){
       const body = Object.assign({}, patch, patch.at ? { at: iso(patch.at) } : {});
       const r = await api('POST', '/appointments/'+encodeURIComponent(id), body);
-      await this.listAppointments(); cache.props = (await api('GET','/properties?since='+encodeURIComponent(new Date(Date.now()-60000).toISOString()))).map(normProp).reduce((arr,p)=>{ const i=arr.findIndex(x=>x.id===p.id); if (i>=0) arr[i]=p; else arr.push(p); return arr; }, cache.props); reapplyQueued(); saveCache();
+      await this.listAppointments(); mergeBy(cache.props, (await api('GET','/properties?since='+encodeURIComponent(new Date(Date.now()-60000).toISOString()))).map(normProp), x => x.id); reapplyQueued(); saveCache();
       return r;
     },
     async claimTerritory(id){ const t = normTerr(await api('POST', `/territories/${encodeURIComponent(id)}/claim`)); const i=cache.terrs.findIndex(x=>x.id===t.id); if (i>=0) cache.terrs[i]=t; saveCache(); return t; },
@@ -828,7 +841,7 @@ const DB = (() => {
       flushing = (async () => {
         if (!navigator.onLine || !queue.length) return 0;
         let n = 0;
-        const knocks = queue.filter(q => q.type==='knock').map(q => q.body);
+        const knocks = queue.filter(q => q.type==='knock' && !held.has(q.body.client_id)).map(q => q.body);
         for (const k of knocks){ if (k.photos) delete k.photos; }   // no upload route on the server yet; photos stay off until it exists
         if (knocks.length){
           const res = await api('POST','/knocks', knocks);      // idempotent on client_id
@@ -843,6 +856,22 @@ const DB = (() => {
       return flushing;
     },
     async queueLength(){ return queue.length; },
+    hold(cid){ held.add(cid); },
+    release(cid){ held.delete(cid); },
+    async undoKnock(cid, prev){   // only possible while the knock is still on the phone; once sent it is on the server
+      const qi = queue.findIndex(q => q.type==='knock' && q.body.client_id===cid); if (qi < 0) return false;
+      const body = queue[qi].body; queue.splice(qi, 1); held.delete(cid);
+      cache.knocks = cache.knocks.filter(k => k.client_id !== cid);
+      const p = cache.props.find(x => x.id === body.property_id);
+      if (p && prev){ p.status = prev.status; p.last_knock_at = prev.last_knock_at; p.last_knock_by = prev.last_knock_by; p.callback_at = prev.callback_at; p.appointment_at = prev.appointment_at; }
+      saveQueue(); saveCache(); return true;
+    },
+    async wipeLocal(){   // sign-out: houses and knocks leave the phone
+      try { localStorage.removeItem(QKEY); localStorage.removeItem(CKEY); localStorage.removeItem(KKEY); } catch(e){}
+      try { await IDB.set('props', null); } catch(e){}
+      try { indexedDB.deleteDatabase('doorboss'); } catch(e){}
+      cache = { props:[], terrs:[], users:[], knocks:[], positions:[], me:null, goals:null, settings:null, propsSince:null }; queue = [];
+    },
     async getGoals(){ return cache.goals || { daily_knocks:60, daily_contacts:20, daily_appts:2 }; },
     async setGoals(g){ cache.goals = await api('PUT','/goals', g); saveCache(); },
     async getSettings(){ return cache.settings || {}; },
@@ -1069,8 +1098,8 @@ function initMap(){
   $('#fabLocate').onclick = () => { if (A.myPos) map.setView(A.myPos, Math.max(map.getZoom(),17)); else toast('No position yet'); };
   $('#fabAdd').onclick = () => { if (!A.myPos) return toast('No position yet'); openAddHouse(A.myPos); };
   $('#fabRoute').onclick = () => { if (A.route) { confirmBox('End route?', `${A.route.plan.length-A.route.i} doors left on it.`, endRoute, 'End route'); } else startRoute(); };
-  map.on('zoomend', () => { renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
-  map.on('moveend', () => { if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); });
+  map.on('zoomend', () => { A._zr = Date.now(); renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
+  map.on('moveend', () => { if (A._zr && Date.now() - A._zr < 400) return; if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); });   // v21: a zoom already redrew
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
@@ -1119,7 +1148,7 @@ function pinStyle(p){
   // v17: the page-wide lookups (computed style, zoom, theme, touch) happen once per 50 ms, not once per pin
   const nowT = performance.now(); let pc = A._pc;
   if (!pc || nowT - pc.t > 50){ const z = A.map ? A.map.getZoom() : 16; pc = A._pc = { t:nowT, css:getComputedStyle(document.documentElement), col:{},
-    base:(z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4) * (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 1.4 : 1),   // fingers, not mouse pointers: bigger pins on phones
+    base:(z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4) * (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 1.7 : 1),   // fingers, not mouse pointers: bigger pins on phones
     dark:document.documentElement.getAttribute('data-theme')==='dark' || (document.documentElement.getAttribute('data-theme')!=='light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) }; }
   const s=S[p.status]||S.unknocked; const col = pc.col[p.status] || (pc.col[p.status] = pc.css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888');
   const big = p.status==='appointment'||p.status==='signed'||p.status==='callback';
@@ -1128,6 +1157,7 @@ function pinStyle(p){
 }
 const CLUSTER_ZOOM = 15;
 const clusterZoom = () => A.props.length > 8000 ? 16 : CLUSTER_ZOOM;   // v17: a big list stays clustered one zoom level longer
+const clusterSub = c => A.filter==='callbacks' ? 'follow-ups' : A.filter==='appts' ? 'appts' : A.filter==='hot' ? 'hot' : c.k+' to knock';   // v21: the label follows the active filter
 function renderClusters(list){
   if (!A.clusterLayer) A.clusterLayer = L.layerGroup().addTo(A.map);
   A.clusterLayer.clearLayers();
@@ -1136,7 +1166,7 @@ function renderClusters(list){
   if (A.props.length > 3000 && z >= 13){ const b = A.map.getBounds().pad(0.5); list = list.filter(p => b.contains([p.lat,p.lng])); }   // v17: only the clusters near the screen are drawn
   for (const p of list){ const key=Math.floor(p.lat/cell)+'|'+Math.floor(p.lng/(cell*1.3)); const c = cells[key] ||= { n:0, lat:0, lng:0, k:0 }; c.n++; c.lat+=p.lat; c.lng+=p.lng; if (isKnockable(p)) c.k++; }
   for (const key in cells){ const c=cells[key]; const lat=c.lat/c.n, lng=c.lng/c.n; const r = c.n>200?26: c.n>60?22: c.n>15?18:14;
-    const icon = L.divIcon({ className:'', html:`<div class="cluster" style="width:${r*2}px;height:${r*2}px"><b>${c.n}</b><i>${c.k} to knock</i></div>`, iconSize:[r*2,r*2], iconAnchor:[r,r] });
+    const icon = L.divIcon({ className:'', html:`<div class="cluster" style="width:${r*2}px;height:${r*2}px"><b>${c.n}</b><i>${clusterSub(c)}</i></div>`, iconSize:[r*2,r*2], iconAnchor:[r,r] });
     const m = L.marker([lat,lng], { icon }); m.on('click', () => A.map.setView([lat,lng], Math.min(17, z+2))); A.clusterLayer.addLayer(m); }
 }
 function renderPins(){
@@ -1382,12 +1412,13 @@ function renderSheet(){
   const tier=TIERS[p.tier]||TIERS.none; const dist = A.myPos ? haversine(A.myPos,[p.lat,p.lng]) : null;
   const nav = `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
   const sel = A.pendingStatus || null;
+  if (A.pendingStatus==='callback' && !A.pendingWhen) A.pendingWhen = atLocal(1,17);   // v21: follow-up defaults to tomorrow 5 pm (appointments always need an explicit time)
   const needsWhen = sel==='callback' || sel==='appointment';
   const el=$('#sheetBody');
   el.innerHTML = `
     <div class="stack">
       <div class="row between" style="align-items:flex-start">
-        <div style="min-width:0"><h2>${esc(p.address)}</h2><div class="muted" style="font-size:13px">${esc([p.city,p.zip].filter(Boolean).join(' '))}${dist!=null?' · '+fmtDist(dist):''}${p.territory_id?' · '+esc((byId(A.terrs,p.territory_id)||{}).name||''):''}</div></div>
+        <div style="min-width:0"><h2>${esc(p.address)}</h2><div class="muted" style="font-size:13px">${esc([p.city,p.zip].filter(Boolean).join(' '))}${dist!=null?' · '+fmtDist(dist):''}${p.territory_id?' · '+esc((byId(A.terrs,p.territory_id)||{}).name||''):''}</div>${p.owner_name&&ownerFirst(p)!=='there'?`<div style="font-size:20px;font-weight:700;margin-top:6px">👤 ${esc(ownerFirst(p))}</div>`:''}${hist.length?`<div class="muted" style="font-size:13px">Last: ${esc((S[hist[0].status]||S.unknocked).label)} · ${fmtDT(hist[0].created_at)}</div>`:''}</div>
         <div class="row" style="gap:6px;flex:none">${statusChip(p.status)}<button class="back" id="sheetClose" aria-label="Close" style="padding:0 10px">Close</button></div>
       </div>
       <div class="row" style="flex-wrap:wrap;gap:6px">
@@ -1395,7 +1426,7 @@ function renderSheet(){
       </div>
       <div class="kv">
         <b>Owner</b><span>${esc(p.owner_name||'—')}</span>
-        <b>Phone</b><span>${p.owner_phone?`<span class="num">${esc(p.owner_phone)}</span> <button class="btn sm" data-copy="${esc(p.owner_phone)}">Copy</button>`:'—'}</span>
+        <b>Phone</b><span>${p.owner_phone?`<span class="num">${esc(p.owner_phone)}</span> <a class="btn sm primary" href="tel:${esc(String(p.owner_phone).replace(/[^\d+]/g,''))}">📞 Call</a> <button class="btn sm" data-copy="${esc(p.owner_phone)}">Copy</button>`:'—'}</span>
         <b>Email</b><span style="word-break:break-all">${esc(p.owner_email||'—')}</span>
         <b>Installer</b><span>${esc(p.installer||'—')}${p.installer_closed?` <span class="muted">· ${/^\s*\(license/i.test(p.installer_closed)?'':'closed '}${esc(p.installer_closed)}</span>`:''}</span>
         <b>Finance</b><span>${esc(p.finance_co||'—')}</span>
@@ -1442,16 +1473,17 @@ function renderSheet(){
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{
     const cur=apptOf(p);
     if (b.dataset.st==='appointment' && isOpenAp(cur) && !cur.pending){ const w=$('#apWhen'); if (w){ w.hidden=false; $('#apResult').hidden=true; $('#apWhenInput').value=toLocalInput(cur.at); w.scrollIntoView({ behavior:'smooth', block:'center' }); } toast('Already booked · pick a new time to reschedule'); return; }
-    A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
+    if (TERMINAL.has(b.dataset.st)){ A.pendingStatus=b.dataset.st; saveKnock({ quick:true }); return; }
+    setPending(b.dataset.st); const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
   const ok=$('#okText'); if (ok) ok.onchange=()=>{ A.pendingTextOk=ok.checked; };
-  const sf=$('#setFollow'); if (sf) sf.onclick=()=>{ A.pendingStatus='callback'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
+  const sf=$('#setFollow'); if (sf) sf.onclick=()=>{ setPending('callback'); const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
   const sm=$('#shMap'); if (sm) sm.onclick=()=>showOnMap(p.id);
   const si=$('#shIntake'); if (si) si.onclick=()=>{   // id only in the address bar: no homeowner details in the URL
     if (/SAMPLE/i.test(p.source||'')) return toast('Practice house: intake is off for sample houses');
     if (!A.me.ghl_user_id) return toast('Your login is not linked to a GHL user yet. Ask your manager to link it before starting an intake.');
-    confirmBox('Start intake with '+(firstName(p.owner_name)||'this homeowner')+'?', 'Opens the intake with their details filled in and adds them to GHL, assigned to you. Do this when you are sitting down with them.', ()=>{ (window.top||window).location.href='/intake/new?doorbossPropertyId='+encodeURIComponent(p.id); }, 'Start intake');
+    confirmBox('Start intake with '+(ownerFirst(p)==='there'?'this homeowner':ownerFirst(p))+'?', 'Opens the intake with their details filled in and adds them to GHL, assigned to you. Do this when you are sitting down with them.', ()=>{ (window.top||window).location.href='/intake/new?doorbossPropertyId='+encodeURIComponent(p.id); }, 'Start intake');
   };
-  const ba=$('#bookAppt'); if (ba) ba.onclick=()=>{ A.pendingStatus='appointment'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
+  const ba=$('#bookAppt'); if (ba) ba.onclick=()=>{ setPending('appointment'); const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
   const qw=$('#quickWhen'); if (qw) qw.onclick=e=>{ const b=e.target.closest('button'); if (!b) return; let t; if (b.dataset.min) t=now()+b.dataset.min*60000; if (b.dataset.tmr || b.dataset.days){ const d=new Date(); d.setDate(d.getDate()+(b.dataset.tmr?1:+b.dataset.days)); d.setHours(b.dataset.tmr?+b.dataset.tmr:(sel==='callback'?17:18),0,0,0); t=d.getTime(); } A.pendingWhen=t; $('#whenInput').value=toLocalInput(t); $$('#quickWhen button').forEach(x=>x.classList.toggle('on',x===b)); };
   const wi=$('#whenInput'); if (wi) wi.onchange=()=>{ A.pendingWhen = wi.value ? new Date(wi.value).getTime() : null; };
   $('#saveKnock').onclick = saveKnock;
@@ -1471,6 +1503,21 @@ function renderSheet(){
   }
 }
 const atLocal = (days, hour) => { const d=new Date(); d.setDate(d.getDate()+days); d.setHours(hour,0,0,0); return d.getTime(); };   // DST-safe, phone's local time
+const TERMINAL = new Set(['not_home','not_interested','do_not_knock']);   // v21: these save with ONE tap (Undo for 5 s)
+function setPending(st){ if (A.pendingStatus!==st) A.pendingWhen=null; A.pendingStatus=st; }
+function toastUndo(msg, onUndo){
+  const el=$('#toast'); el.innerHTML = esc(msg)+' <button id="undoBtn" style="margin-left:10px;padding:6px 14px;border-radius:8px;border:0;font-weight:700;background:#fff;color:#12202e">Undo</button>';
+  el.classList.add('show'); el.style.pointerEvents='auto'; clearTimeout(toastT);
+  const hide = () => { el.classList.remove('show'); el.style.pointerEvents=''; };
+  toastT = setTimeout(hide, 5500);
+  $('#undoBtn').onclick = () => { clearTimeout(toastT); hide(); onUndo(); };
+}
+async function signOut(){
+  let n = await DB.queueLength();
+  if (n && navigator.onLine){ try { await flushQueue(); } catch(e){} n = await DB.queueLength(); }
+  const go = async () => { try { await DB.wipeLocal(); } catch(e){} try { localStorage.removeItem('doorboss.token'); localStorage.removeItem('repAccessKey'); } catch(e){} try { (window.top||window).location.href='/login'; } catch(e){ location.href='/login'; } };
+  confirmBox('Sign out?', n ? ('You have '+n+' knock'+(n===1?'':'s')+' that have not synced yet. Get signal and tap Sync now first, or those knocks are lost.') : 'This clears the houses and your login from this phone.', go, n ? 'Sign out and lose them' : 'Sign out');
+}
 /* One appointment action at a time; on failure say so; only redraw the card if the rep is still on that house (v16) */
 async function apUpdate(p, ap, patch, okMsg, btn){
   if (A.apBusy) return; A.apBusy=true; if (btn) btn.disabled=true;
@@ -1480,36 +1527,50 @@ async function apUpdate(p, ap, patch, okMsg, btn){
   } catch(e){ toast(/: 40[13] /.test(String(e && e.message)) ? 'Not saved · sign in again' : 'Not saved · no signal, try again'); }
   finally { A.apBusy=false; if (btn) btn.disabled=false; }
 }
-async function saveKnock(){
+async function saveKnock(opts){
+  const quick = !!(opts && opts.quick === true);   // v21: one-tap outcomes
   const p=A.sheetProp; const st=A.pendingStatus; if (!p||!st||A.savingKnock) return;
   if ((st==='callback'||st==='appointment') && !A.pendingWhen){ toast('Pick a time'); return; }
   A.savingKnock=true; A.pendingStatus=null; const sb=$('#saveKnock'); if (sb) sb.disabled=true;
+  let saved=null; const prev={ status:p.status, last_knock_at:p.last_knock_at, last_knock_by:p.last_knock_by, callback_at:p.callback_at, appointment_at:p.appointment_at };
   try {
   const k = { property_id:p.id, user_id:A.me.id, status:st, note:$('#noteInput').value.trim(), lat:A.myPos?A.myPos[0]:null, lng:A.myPos?A.myPos[1]:null, accuracy_m:A.gpsAcc||null, callback_at: st==='callback'?A.pendingWhen:null, appointment_at: st==='appointment'?A.pendingWhen:null, text_ok: (st==='callback'||st==='interested'||st==='appointment') && !!A.pendingTextOk, source:'door', photos:(A.pendingPhotos||[]).slice(0,3) };
-  await DB.addKnock(k); A.pendingPhotos=[];
+  saved = await DB.addKnock(k); A.pendingPhotos=[];
+  if (quick && saved) DB.hold(saved.client_id);   // the Undo window: this knock is not sent until it closes
   // redraw from the phone's own copy right away; the network catch-up runs in the background (v16)
   A.props = await DB.listProperties(); A.knocks = await DB.listKnocks(); normalizeData();
   if (typeof routeAdvance==='function') routeAdvance(p.id);
   renderPins(); updateNext(); updateFollowBadge(); updateSyncPill();
   if (A.sheetProp===p) closeSheet();
   const msg = { not_home:'Logged · not home', callback:'Follow-up set', interested:'Interested · saved', appointment:'Appointment set', signed:'Signed · saved', not_interested:'Logged', do_not_knock:'Marked do not knock' }[st];
-  toast((msg||'Saved') + (A.online ? '' : ' · will sync when you have signal'));
+  const said = (msg||'Saved') + (A.online ? '' : ' · will sync when you have signal');
+  if (quick && saved){
+    toastUndo(said, async () => { if (await DB.undoKnock(saved.client_id, prev)){ A.props = await DB.listProperties(); A.knocks = await DB.listKnocks(); normalizeData(); renderPins(); updateNext(); updateFollowBadge(); updateSyncPill(); toast('Undone'); } else toast('Too late to undo'); });
+    setTimeout(() => { DB.release(saved.client_id); flushQueue(); }, 5500);
+    const nx = A.nextId ? byId(A.props, A.nextId) : null;   // still on this street? open the next door for them
+    if (nx && A.myPos && haversine(A.myPos,[nx.lat,nx.lng]) < 150) setTimeout(() => { if (!A.sheetProp) openSheet(nx.id); }, 300);
+  } else toast(said);
   } finally { A.savingKnock=false; }
-  flushQueue(); reload().then(()=>{ renderPins(); updateNext(); updateFollowBadge(); if (A.view==='follow') renderFollow(); }).catch(()=>{});
+  if (!quick) flushQueue();
+  reload().then(()=>{ renderPins(); updateNext(); updateFollowBadge(); if (A.view==='follow') renderFollow(); }).catch(()=>{});
 }
 function openTextModal(p){
   const body=document.createElement('div'); body.className='stack';
   // v19: only say an installer is gone when the data says so
   const why = licReason(p.installer_closed);
   const closure = p.installer_status!=='bankrupt' ? ' We help homeowners review their solar contract.' : why==='inactive' ? ' Since their contractor license is no longer active, you may have options on that contract.' : why ? ' Since their contractor license was '+why+', you may have options on that contract.' : ' Since they shut down, you may have options on that contract.';
-  const fill = tpl => tpl.replace('{first}',firstName(p.owner_name)).replace('{rep}',firstName(A.me.name)).replace('{installer}',p.installer||'the installer').replace('{closure}', closure).replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
+  const inst = p.installer || 'the installer';
+  const what = p.tier==='verified_installed' ? 'the solar system '+inst+' put on your home' : 'the solar permit '+inst+' pulled for your home';   // v21: never say a system was installed unless the permit was finaled
+  const fill = tpl => tpl.replace('{what}', what).replace('{first}',ownerFirst(p)).replace('{rep}',firstName(A.me.name)).replace('{installer}',p.installer||'the installer').replace('{closure}', closure).replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
   body.innerHTML = `<div class="muted" style="font-size:13px">To <b class="num">${esc(p.owner_phone||'no phone on file')}</b> · opens your phone's Messages app with this text filled in</div>
     <div class="quick" id="tplQuick">${CONFIG.textTemplates.map((t,i)=>`<button data-i="${i}" class="${i===0?'on':''}">${esc(t.label)}</button>`).join('')}</div>
     <textarea id="txtBody" style="min-height:110px">${esc(fill(CONFIG.textTemplates[0].body))}</textarea>`;
-  openModal({ title:'Text '+esc(firstName(p.owner_name)), body, actions:[{label:'Cancel'},{label:'Open in Messages',primary:true,onClick:()=>{
+  openModal({ title:'Text '+esc(ownerFirst(p)==='there'?'the homeowner':ownerFirst(p)), body, actions:[{label:'Cancel'},{label:'Open in Messages',primary:true,onClick:()=>{
     if (!p.owner_phone){ toast('No phone on file'); return false; }
-    const num=String(p.owner_phone).replace(/[^\d+]/g,'');
-    (window.top||window).location.href='sms:'+num+'?&body='+encodeURIComponent($('#txtBody').value);
+    const num=String(p.owner_phone).replace(/[^\d+]/g,''); const txt=$('#txtBody').value;
+    const go = () => { (window.top||window).location.href='sms:'+num+'?&body='+encodeURIComponent(txt); };
+    if (A.knocks.some(k => k.property_id===p.id && k.text_ok)) { go(); return; }   // v21: consent is on file
+    confirmBox('No OK to text on file', 'Only text if they told you it is OK. Tap the button only if they did.', go, 'They said OK');
   }}] });
   $('#tplQuick').onclick=e=>{ const b=e.target.closest('button'); if(!b) return; $$('#tplQuick button').forEach(x=>x.classList.toggle('on',x===b)); $('#txtBody').value=fill(CONFIG.textTemplates[b.dataset.i].body); };
 }
@@ -1547,13 +1608,13 @@ function followItems(){
 function updateFollowBadge(){ const f=followItems(); const n=f.overdue.length+f.today.length+f.apptsToday.length; const b=$('#followCnt'); b.hidden=!n; b.textContent=n; }
 function renderFollow(){
   const f=followItems(); const w=$('#followWrap');
-  const row = (p, when, label) => `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:${S[p.status].color};flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${label} · ${esc(userName(p.last_knock_by))}${(()=>{ const k=A.knocks.filter(k=>k.property_id===p.id).reduce((a,k)=>!a||(k.created_at||0)>(a.created_at||0)?k:a,null); return k&&k.note?' · '+esc(k.note):''; })()}</div></div><span class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</span><button class="btn sm rowmap" data-map="${p.id}" aria-label="Show on map">📍</button></div>`;
+  const row = (p, when, label) => `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:${S[p.status].color};flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(ownerFirst(p))}</span></div><div class="s">${label} · ${esc(userName(p.last_knock_by))}${(()=>{ const k=A.knocks.filter(k=>k.property_id===p.id).reduce((a,k)=>!a||(k.created_at||0)>(a.created_at||0)?k:a,null); return k&&k.note?' · '+esc(k.note):''; })()}</div></div><span class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</span><button class="btn sm rowmap" data-map="${p.id}" aria-label="Show on map">📍</button></div>`;
   const sec = (title, arr, fn, empty) => `<div class="card"><div class="row between" style="margin-bottom:4px"><h3 style="font-size:18px">${title}</h3><span class="muted num">${arr.length}</span></div><div class="list">${arr.length?arr.map(fn).join(''):`<div class="muted" style="font-size:13px;padding:8px 0">${empty}</div>`}</div></div>`;
   const mineOnly = !isMgr();
   const myAppts = A.appts.filter(a => !mineOnly || a.user_id===A.me.id);
   const needs = myAppts.filter(a => (a.status==='scheduled'||a.status==='confirmed') && a.at < now()-30*60000).sort((a,b)=>b.at-a.at);
   const recent = myAppts.filter(a => (a.status==='held'||a.status==='no_show'||a.status==='cancelled') && a.updated_at > now()-7*DAY).sort((a,b)=>b.updated_at-a.updated_at).slice(0,8);
-  const arow = (a, when) => { const p=byId(A.props,a.property_id); if (!p) return ''; return `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:var(--s-appointment);flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${esc(userName(a.user_id))}${a.note?' · '+esc(a.note):''}</div></div><div style="text-align:right"><div class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</div>${apptChip(a)}</div><button class="btn sm rowmap" data-map="${p.id}" aria-label="Show on map">📍</button></div>`; };
+  const arow = (a, when) => { const p=byId(A.props,a.property_id); if (!p) return ''; return `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:var(--s-appointment);flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(ownerFirst(p))}</span></div><div class="s">${esc(userName(a.user_id))}${a.note?' · '+esc(a.note):''}</div></div><div style="text-align:right"><div class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</div>${apptChip(a)}</div><button class="btn sm rowmap" data-map="${p.id}" aria-label="Show on map">📍</button></div>`; };
   w.innerHTML = `<div class="stack">
     <div class="row between"><h2>Follow-ups</h2><span class="muted" style="font-size:13px">${fmtDate(now())}</span></div>
     ${needs.length?sec('<span style="color:var(--warn)">Appointments needing an outcome</span>', needs, a=>arow(a, fmtDT(a.at)), ''):''}
@@ -1930,8 +1991,9 @@ function renderMeView(){
       <div class="list" id="keyList"></div><button class="btn sm" data-act="newKey">Create API key</button>
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
+    <div class="card stack"><h3 style="font-size:18px">Account</h3><div class="muted" style="font-size:13px">Signed in as ${esc(A.me.email||A.me.name)}.</div><button class="btn sm danger" data-act="signOut">Sign out</button></div>
     ${CONFIG.demo?`<div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>`:''}
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v20 (orphaned installers show the exact reason: bankrupt or license revoked / suspended / cancelled / surrendered).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-16 v21 (one-tap save + Undo, Call, sign-out, consent check, honest texts, faster map).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -1940,6 +2002,7 @@ function renderMeView(){
     if (b.dataset.rep){ openRep(b.dataset.rep); return; }
     switch (b.dataset.act){
       case 'enablePush': enablePush(); break;
+      case 'signOut': signOut(); break;
       case 'addUser': editUser(null); break;
       case 'flush': { syncToast(await flushQueue()); renderMeView(); break; }
       case 'saveGoals': await DB.setGoals({ daily_knocks:+$('#g_k').value||60, daily_contacts:+$('#g_c').value||20, daily_appts:+$('#g_a').value||2 }); await reload(); renderMeView(); toast('Goals saved'); break;
@@ -1978,7 +2041,7 @@ function askCoach(q){
     a = `Today:\n1. ${f.overdue.length} overdue follow-up${f.overdue.length===1?'':'s'} and ${f.today.length} due today — do those first, they book at ${me.fuApptRate?Math.round(me.fuApptRate*100)+'%':'3x the rate of fresh doors'}.\n2. ${f.apptsToday.length} appointment${f.apptsToday.length===1?'':'s'} today — confirm by text now.\n3. ${kn} knockable doors in your territory. At ${me.doorsPerHour?me.doorsPerHour.toFixed(0):'10'} doors an hour, save 4–8 pm for fresh doors.\nGoal: ${A.goals.daily_knocks} doors, ${A.goals.daily_contacts} talks, ${A.goals.daily_appts} appts.`;
   } else if (/pitch|say|script|installer|open/.test(q)){
     const inst={}; A.props.filter(p=>inMyTerr(p)&&p.installer_status==='bankrupt').forEach(p=>inst[p.installer]=(inst[p.installer]||0)+1); const topInst=Object.entries(inst).sort((a,b)=>b[1]-a[1])[0];
-    a = topInst ? `Most of your orphaned-installer homes are ${topInst[0]} (${topInst[1]} homes). Open with the fact, not the offer: "I want to make sure someone is still looking after the system ${topInst[0]} installed — do you know who services it now?" For homes with a permit and no panels: "Are you still paying for a system that never got turned on?" Then book a 20-minute contract review. Never say "cancel your solar" at the door.` : 'No orphaned-installer homes in your territory. Open by asking how their solar system is working and who looks after it now. Book the review.';
+    a = topInst ? `Most of your orphaned-installer homes are ${topInst[0]} (${topInst[1]} homes). Open with the fact, not the offer: "I want to make sure someone is still looking after the solar work ${topInst[0]} did — do you know who services it now?" For homes with a permit and no panels: "Are you still paying for a system that never got turned on?" Then book a 20-minute contract review. Never say "cancel your solar" at the door.` : 'No orphaned-installer homes in your territory. Open by asking how their solar system is working and who looks after it now. Book the review.';
   } else {
     a = `This month: ${me.doors} doors, ${me.contacts} talks (${Math.round(me.contactRate*100)}%), ${me.appts} appointments (${Math.round(me.apptRate*100)}% of talks), ${me.signed} signed. Average start ${fmtClock(me.avgStart)}, ${me.hoursPerDay.toFixed(1)} h a day. Ask me "why am I getting fewer appointments" or "when should I knock."`;
   }
@@ -2026,12 +2089,15 @@ $('#syncPill').onclick = async()=>{ syncToast(await flushQueue()); };
 /* ---------- GPS ---------- */
 const GPS = { watchId:null, lastFix:null, acc:null, heading:null, speed:null, on:false, consent:false, trail:[], wake:null, badFixes:0 };
 
+function updateNextThrottled(){   // v21: a GPS fix every second must not rescan every house; only when 5 s passed or the rep moved 15 m
+  const t=Date.now(), pos=A.myPos; if (A._nxT && t-A._nxT < 5000 && A._nxPos && pos && haversine(A._nxPos,pos) < 15) return; A._nxT=t; A._nxPos=pos?pos.slice():null; updateNext();
+}
 function setMyPos(ll, fromGps, meta){
   A.myPos=ll; A.gpsOk=!!fromGps;
   if (fromGps && meta){ GPS.lastFix=now(); GPS.acc=meta.acc; GPS.heading=meta.heading; GPS.speed=meta.speed; A.gpsAcc=Math.round(meta.acc||0);
     const last=GPS.trail[GPS.trail.length-1]; if (!last || haversine(last.ll, ll) > 8) { GPS.trail.push({ ll, at:now(), acc:meta.acc }); if (GPS.trail.length>2000) GPS.trail.shift(); }
   }
-  renderMeMarker(); updateNext(); updateTrackPill();
+  renderMeMarker(); updateNextThrottled(); updateTrackPill();
   // first real fix: bring the rep to where they stand, unless they already moved the map or the list is somewhere else entirely
   if (fromGps && !A.centeredOnMe && A.map){
     A.centeredOnMe = true;
@@ -2151,14 +2217,14 @@ function reminderTick(){
   const t=now(); const mineOnly = !isMgr();
   for (const p of A.props){
     if (p.status==='callback' && p.callback_at && (!mineOnly || isMine(p))){
-      const dt=p.callback_at-t; if (dt>0 && dt<=15*60000) remind('cb:'+p.id+':'+p.callback_at, 'Follow-up in '+Math.round(dt/60000)+' min', p.address+' · '+firstName(p.owner_name), p.id);
-      if (dt<0 && dt>-5*60000) remind('cbd:'+p.id+':'+p.callback_at, 'Follow-up is now', p.address+' · '+firstName(p.owner_name), p.id);
+      const dt=p.callback_at-t; if (dt>0 && dt<=15*60000) remind('cb:'+p.id+':'+p.callback_at, 'Follow-up in '+Math.round(dt/60000)+' min', p.address+' · '+ownerFirst(p), p.id);
+      if (dt<0 && dt>-5*60000) remind('cbd:'+p.id+':'+p.callback_at, 'Follow-up is now', p.address+' · '+ownerFirst(p), p.id);
     }
   }
   for (const a of A.appts){
     if ((a.status==='scheduled'||a.status==='confirmed') && (!mineOnly || a.user_id===A.me.id)){
       const p=byId(A.props,a.property_id); if (!p) continue; const dt=a.at-t;
-      if (dt>0 && dt<=60*60000) remind('ap:'+a.id+':'+a.at, 'Appointment in '+Math.round(dt/60000)+' min', p.address+' · '+firstName(p.owner_name), p.id);
+      if (dt>0 && dt<=60*60000) remind('ap:'+a.id+':'+a.at, 'Appointment in '+Math.round(dt/60000)+' min', p.address+' · '+ownerFirst(p), p.id);
       if (dt<-45*60000 && dt>-50*60000) remind('apo:'+a.id, 'Log the outcome', p.address+' — held, no-show, or reschedule?', p.id);
     }
   }
