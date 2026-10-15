@@ -427,7 +427,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
    ============================================================ */
 const CONFIG = {
   appName: 'DoorBoss',
-  intakeStart: false,                        // shows 'Start intake' once the portal has /intake/new (AI Studio prompt 10/15)
+  intakeStart: true,                         // shows 'Start intake' once the portal has /intake/new (AI Studio prompt 10/15)
   demoCenter: [39.6975, -104.8262],          // Aurora, CO
   // Streets: Esri World Street Map — clean, keyless, built for app traffic, same host as the satellite layer. (OSM's own tile server blocks apps at team scale.)
   tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
@@ -1394,7 +1394,10 @@ function renderSheet(){
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{ A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
   const sf=$('#setFollow'); if (sf) sf.onclick=()=>{ A.pendingStatus='callback'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
   const sm=$('#shMap'); if (sm) sm.onclick=()=>showOnMap(p.id);
-  const si=$('#shIntake'); if (si) si.onclick=()=>{ (window.top||window).location.href='/intake/new?doorbossPropertyId='+encodeURIComponent(p.id); };   // id only: no homeowner details in the address bar
+  const si=$('#shIntake'); if (si) si.onclick=()=>{   // id only in the address bar: no homeowner details in the URL
+    if (/SAMPLE/i.test(p.source||'')) return toast('Practice house: intake is off for sample houses');
+    confirmBox('Start intake with '+(firstName(p.owner_name)||'this homeowner')+'?', 'Opens the intake with their details filled in and adds them to GHL, assigned to you. Do this when you are sitting down with them.', ()=>{ (window.top||window).location.href='/intake/new?doorbossPropertyId='+encodeURIComponent(p.id); }, 'Start intake');
+  };
   const ba=$('#bookAppt'); if (ba) ba.onclick=()=>{ A.pendingStatus='appointment'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
   const qw=$('#quickWhen'); if (qw) qw.onclick=e=>{ const b=e.target.closest('button'); if (!b) return; let t; if (b.dataset.min) t=now()+b.dataset.min*60000; if (b.dataset.tmr || b.dataset.days){ const d=new Date(); d.setDate(d.getDate()+(b.dataset.tmr?1:+b.dataset.days)); d.setHours(b.dataset.tmr?+b.dataset.tmr:(sel==='callback'?17:18),0,0,0); t=d.getTime(); } A.pendingWhen=t; $('#whenInput').value=toLocalInput(t); $$('#quickWhen button').forEach(x=>x.classList.toggle('on',x===b)); };
   const wi=$('#whenInput'); if (wi) wi.onchange=()=>{ A.pendingWhen = wi.value ? new Date(wi.value).getTime() : null; };
@@ -1578,7 +1581,7 @@ function explainGap(a, b){
   drv.push({ k:'evening', label:'Doors after 4 pm', a:a.eveningShare, b:b.eveningShare, fa:Math.round(a.eveningShare*100)+'%', fb:Math.round(b.eveningShare*100)+'%', impact:evLift, fix:`Move ${Math.round((b.eveningShare-a.eveningShare)*a.doorsPerDay)} doors a day to after 4 pm — answer rate is ${Math.round((a.eveningContactRate||b.eveningContactRate)*100)}% then vs ${Math.round((a.dayContactRate||b.dayContactRate)*100)}% midday` });
   drv.push({ k:'contact', label:'Answer rate', a:a.contactRate, b:b.contactRate, fa:Math.round(a.contactRate*100)+'%', fb:Math.round(b.contactRate*100)+'%', impact:a.doors*(b.contactRate-a.contactRate)*ar, fix:'Same hours, fewer answers: check the territory and knock-wait time (12 seconds, two knocks)' });
   drv.push({ k:'pitch', label:'Appointment rate', a:a.apptRate, b:b.apptRate, fa:Math.round(a.apptRate*100)+'% of talks', fb:Math.round(b.apptRate*100)+'% of talks', impact:a.contacts*(b.apptRate-a.apptRate), fix:`Ride along with ${b.name}. The pitch is the gap, not the schedule.` });
-  drv.push({ k:'followups', label:'Follow-ups per day', a:a.followupsPerDay, b:b.followupsPerDay, fa:a.followupsPerDay.toFixed(1), fb:b.followupsPerDay.toFixed(1), impact:(b.followupsPerDay-a.followupsPerDay)*a.days*(a.fuApptRate??b.fuApptRate??0.2), fix:`${a.overdue} callback${a.overdue===1?'':'s'} overdue right now. Follow-ups book at 3x the rate of fresh doors.` });
+  drv.push({ k:'followups', label:'Follow-up visits per day', a:a.followupsPerDay, b:b.followupsPerDay, fa:a.followupsPerDay.toFixed(1), fb:b.followupsPerDay.toFixed(1), impact:(b.followupsPerDay-a.followupsPerDay)*a.days*(a.fuApptRate??b.fuApptRate??0.2), fix:`${a.overdue} follow-up${a.overdue===1?'':'s'} overdue right now. Follow-ups book at 3x the rate of fresh doors.` });
   const reasons = drv.filter(d => d.impact > 0.3).sort((x,y)=>y.impact-x.impact).slice(0,3);
   const same = drv.filter(d => d.impact <= 0.3 && d.impact >= -0.3).map(d=>d.label);
   const better = drv.filter(d => d.impact < -0.3).map(d=>d.label);
@@ -1644,14 +1647,14 @@ function renderLive(perRep){
 }
 const myTerrsOf = uid => A.terrs.filter(t=>(t.assigned_user_ids||[]).includes(uid));
 function renderBoard(perRep){
-  const metricDefs = { knocks:'Doors', contacts:'Talks', appts:'Appts', signed:'Signed', rate:'Appt %', early:'Before 10:30', evening:'After 4 pm', start:'Earliest start' };
+  const metricDefs = { knocks:'Doors', contacts:'Talks', callbacks:'Follow-ups set', appts:'Appts', signed:'Signed', rate:'Appt %', early:'Before 10:30', evening:'After 4 pm', start:'Earliest start' };
   const sums = perRep.map(({u,m}) => ({ u, m, s: repSummary(u.id, A.period) }));
   const val = r => { switch (A.boardMetric){ case 'rate': return r.m.contacts?r.m.appts/r.m.contacts:0; case 'early': return r.s.early; case 'evening': return r.s.evening; case 'start': return r.s.avgStart==null?0:(24-r.s.avgStart); default: return r.m[A.boardMetric]; } };
   const shown = r => { switch (A.boardMetric){ case 'rate': return pct(r.m.appts,r.m.contacts); case 'start': return fmtClock(r.s.avgStart); default: return val(r); } };
   const sorted=sums.slice().sort((a,b)=>val(b)-val(a)); const max=Math.max(1,...sorted.map(val));
   return `<div class="stack">
     <div class="sub-tabs">${Object.entries(metricDefs).map(([k,l])=>`<button data-bm="${k}" class="${A.boardMetric===k?'on':''}">${l}</button>`).join('')}</div>
-    <div class="card"><div class="list">${sorted.map((r,i)=>{ const {u,m,s}=r; return `<div class="item" data-rep="${u.id}" style="cursor:pointer"><span style="font-family:var(--font-display);font-size:22px;font-weight:700;width:28px;text-align:center" class="num">${i+1}</span><span class="avatar" style="background:${u.color}">${esc(u.name[0])}</span><div class="body"><div class="t">${esc(u.name)} <span class="muted" style="font-weight:400;font-size:12px">· ${s.days} day${s.days===1?'':'s'}</span></div><div class="bar" style="margin-top:6px"><i style="width:${Math.round(100*val(r)/max)}%;background:${u.color}"></i></div><div class="s" style="margin-top:4px">${m.knocks} doors · ${m.contacts} talks · ${m.appts} appts · ${m.signed} signed · starts ${fmtClock(s.avgStart)}</div></div><span class="num" style="font-family:var(--font-display);font-size:24px;font-weight:700">${shown(r)}</span></div>`; }).join('')}</div></div>
+    <div class="card"><div class="list">${sorted.map((r,i)=>{ const {u,m,s}=r; return `<div class="item" data-rep="${u.id}" style="cursor:pointer"><span style="font-family:var(--font-display);font-size:22px;font-weight:700;width:28px;text-align:center" class="num">${i+1}</span><span class="avatar" style="background:${u.color}">${esc(u.name[0])}</span><div class="body"><div class="t">${esc(u.name)} <span class="muted" style="font-weight:400;font-size:12px">· ${s.days} day${s.days===1?'':'s'}</span></div><div class="bar" style="margin-top:6px"><i style="width:${Math.round(100*val(r)/max)}%;background:${u.color}"></i></div><div class="s" style="margin-top:4px">${m.knocks} doors · ${m.contacts} talks · ${m.callbacks} follow-ups · ${m.appts} appts · ${m.signed} signed · starts ${fmtClock(s.avgStart)}</div></div><span class="num" style="font-family:var(--font-display);font-size:24px;font-weight:700">${shown(r)}</span></div>`; }).join('')}</div></div>
     <div class="muted" style="font-size:12px">Tap a rep for the day-by-day grid and the comparison. Everyone on the team can see this.</div>
   </div>`;
 }
@@ -1668,7 +1671,7 @@ function nudges(period){
   // what the top rep does that the rest don't — the pattern to spread
   const rest = reps.filter(s=>s.uid!==top.uid); if (rest.length){
     const avg = f => rest.reduce((a,s)=>a+s[f],0)/rest.length;
-    const diffs = [['avgStart','starts at '+fmtClock(top.avgStart)+' vs team '+fmtClock(avg('avgStart')), (avg('avgStart')-top.avgStart)/1.5],['eveningShare','knocks '+Math.round(top.eveningShare*100)+'% after 4 pm vs team '+Math.round(avg('eveningShare')*100)+'%', (top.eveningShare-avg('eveningShare'))/0.15],['followupsPerDay','runs '+top.followupsPerDay.toFixed(1)+' follow-ups a day vs team '+avg('followupsPerDay').toFixed(1), (top.followupsPerDay-avg('followupsPerDay'))/2],['apptRate','books '+Math.round(top.apptRate*100)+'% of talks vs team '+Math.round(avg('apptRate')*100)+'%', (top.apptRate-avg('apptRate'))/0.08]].filter(x=>isFinite(x[2])).sort((a,b)=>b[2]-a[2]);
+    const diffs = [['avgStart','starts at '+fmtClock(top.avgStart)+' vs team '+fmtClock(avg('avgStart')), (avg('avgStart')-top.avgStart)/1.5],['eveningShare','knocks '+Math.round(top.eveningShare*100)+'% after 4 pm vs team '+Math.round(avg('eveningShare')*100)+'%', (top.eveningShare-avg('eveningShare'))/0.15],['followupsPerDay','runs '+top.followupsPerDay.toFixed(1)+' follow-up visits a day vs team '+avg('followupsPerDay').toFixed(1), (top.followupsPerDay-avg('followupsPerDay'))/2],['apptRate','books '+Math.round(top.apptRate*100)+'% of talks vs team '+Math.round(avg('apptRate')*100)+'%', (top.apptRate-avg('apptRate'))/0.08]].filter(x=>isFinite(x[2])).sort((a,b)=>b[2]-a[2]);
     if (diffs.length && diffs[0][2] > 0.6) out.unshift({ k:'good', ic:'★', rep:top.uid, t:`Spread this: ${top.name.split(' ')[0]} ${diffs[0][1]}`, s:'Make it the team standard this week. Record a ride-along for the training library.' });
   }
   const noShow = A.appts.filter(a=>a.status==='no_show' && a.at>periodRange(period)[0]).length, heldN = A.appts.filter(a=>a.status==='held' && a.at>periodRange(period)[0]).length;
@@ -1684,7 +1687,8 @@ function renderStats(perRep, team){
     [team.knocks,'Doors knocked', per(team.knocks)+' / day'],
     [team.contacts,'Contacts', pct(team.contacts,team.knocks)+' of doors'],
     [ratio(team.knocks,team.contacts),'Doors per contact', 'lower is better'],
-    [team.followups,'Follow-ups', per(team.followups)+' / day'],
+    [team.callbacks,'Follow-ups set', per(team.callbacks)+' / day · '+pct(team.callbacks,team.contacts)+' of talks'],
+    [team.followups,'Follow-up visits', per(team.followups)+' / day'],
     [team.appts,'Appointments set', per(team.appts)+' / day · '+pct(team.appts,team.contacts)+' of contacts'],
     [team.signed,'Closes', per(team.signed)+' / day · '+pct(team.signed,team.appts)+' of appts'],
     [held,'Appts held', pct(held,held+ns)+' show rate · '+ns+' no-show'],
@@ -1808,7 +1812,7 @@ function renderRep(){
       <div class="muted" style="font-size:12px;margin-top:6px">Impact = estimated appointments over this period if ${esc(u.name.split(' ')[0])} matched ${esc(c.name.split(' ')[0])} on that one thing, using ${esc(u.name.split(' ')[0])}'s own answer and appointment rates.</div></div>`
     : (g && c ? `<div class="card"><h3 style="font-size:18px">${esc(u.name)} vs ${esc(c.name)}</h3><div class="muted" style="font-size:13px">${g.gap<=0?esc(u.name.split(' ')[0])+' is booking as many or more. Nothing to fix here.':'Not enough days to compare yet.'}</div></div>` : '');
   const cmpBlock = c ? `<div class="card"><div class="row between" style="margin-bottom:8px"><h3 style="font-size:18px">Side by side</h3><select id="cmpSel" style="width:auto;height:34px">${reps.map(r=>`<option value="${r.id}" ${r.id===c.uid?'selected':''}>${esc(r.name)}</option>`).join('')}</select></div>
-      <div class="cmp">${[['Doors / day',s.doorsPerDay.toFixed(1),c.doorsPerDay.toFixed(1)],['Average start',fmtClock(s.avgStart),fmtClock(c.avgStart)],['Hours / day',s.hoursPerDay.toFixed(1),c.hoursPerDay.toFixed(1)],['Before 10:30',Math.round(s.earlyShare*100)+'%',Math.round(c.earlyShare*100)+'%'],['After 4 pm',Math.round(s.eveningShare*100)+'%',Math.round(c.eveningShare*100)+'%'],['Answer rate',Math.round(s.contactRate*100)+'%',Math.round(c.contactRate*100)+'%'],['Appt rate',Math.round(s.apptRate*100)+'%',Math.round(c.apptRate*100)+'%'],['Follow-ups / day',s.followupsPerDay.toFixed(1),c.followupsPerDay.toFixed(1)],['Show rate',s.showRate==null?'—':Math.round(s.showRate*100)+'%',c.showRate==null?'—':Math.round(c.showRate*100)+'%']].map(([l,a,b])=>`<div class="v me">${a}</div><div class="l">${l}</div><div class="v">${b}</div>`).join('')}</div>
+      <div class="cmp">${[['Doors / day',s.doorsPerDay.toFixed(1),c.doorsPerDay.toFixed(1)],['Average start',fmtClock(s.avgStart),fmtClock(c.avgStart)],['Hours / day',s.hoursPerDay.toFixed(1),c.hoursPerDay.toFixed(1)],['Before 10:30',Math.round(s.earlyShare*100)+'%',Math.round(c.earlyShare*100)+'%'],['After 4 pm',Math.round(s.eveningShare*100)+'%',Math.round(c.eveningShare*100)+'%'],['Answer rate',Math.round(s.contactRate*100)+'%',Math.round(c.contactRate*100)+'%'],['Appt rate',Math.round(s.apptRate*100)+'%',Math.round(c.apptRate*100)+'%'],['Follow-up visits / day',s.followupsPerDay.toFixed(1),c.followupsPerDay.toFixed(1)],['Show rate',s.showRate==null?'—':Math.round(s.showRate*100)+'%',c.showRate==null?'—':Math.round(c.showRate*100)+'%']].map(([l,a,b])=>`<div class="v me">${a}</div><div class="l">${l}</div><div class="v">${b}</div>`).join('')}</div>
       <div class="row between muted" style="font-size:12px;margin-top:6px"><span>${esc(u.name)}</span><span>${esc(c.name)}</span></div></div>` : '';
   w.innerHTML = `<div class="stack">
     <div class="row between"><button class="back" id="repBack">‹ Back</button><div class="seg" style="width:220px" id="repPeriod">${[['week','Week'],['month','30d']].map(([k,l])=>`<button data-p="${k}" class="${A.repPeriod===k?'on':''}">${l}</button>`).join('')}</div></div>
@@ -1856,7 +1860,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v14 (Show on map, Set follow-up).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v15 (Start intake, Follow-ups set on the leaderboard).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
