@@ -1067,7 +1067,7 @@ function initMap(){
   $('#fabAdd').onclick = () => { if (!A.myPos) return toast('No position yet'); openAddHouse(A.myPos); };
   $('#fabRoute').onclick = () => { if (A.route) { confirmBox('End route?', `${A.route.plan.length-A.route.i} doors left on it.`, endRoute, 'End route'); } else startRoute(); };
   map.on('zoomend', () => { renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
-  map.on('moveend', () => { const z = map.getZoom(); if (z >= 18 || (A.props.length > 3000 && z >= clusterZoom())) renderPins(); });
+  map.on('moveend', () => { if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); });
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
@@ -1113,10 +1113,14 @@ function visibleProps(){
   });
 }
 function pinStyle(p){
-  const css=getComputedStyle(document.documentElement); const s=S[p.status]||S.unknocked; const col=css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888';
+  // v17: the page-wide lookups (computed style, zoom, theme, touch) happen once per 50 ms, not once per pin
+  const nowT = performance.now(); let pc = A._pc;
+  if (!pc || nowT - pc.t > 50){ const z = A.map ? A.map.getZoom() : 16; pc = A._pc = { t:nowT, css:getComputedStyle(document.documentElement), col:{},
+    base:(z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4) * (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 1.4 : 1),   // fingers, not mouse pointers: bigger pins on phones
+    dark:document.documentElement.getAttribute('data-theme')==='dark' || (document.documentElement.getAttribute('data-theme')!=='light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) }; }
+  const s=S[p.status]||S.unknocked; const col = pc.col[p.status] || (pc.col[p.status] = pc.css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888');
   const big = p.status==='appointment'||p.status==='signed'||p.status==='callback';
-  const z = A.map ? A.map.getZoom() : 16; const base = (z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4) * (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 1.4 : 1);   // fingers, not mouse pointers: bigger pins on phones
-  const dark = document.documentElement.getAttribute('data-theme')==='dark' || (document.documentElement.getAttribute('data-theme')!=='light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const base = pc.base, dark = pc.dark;
   return { radius: big?base+2:base, fillColor:col, color: (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
 }
 const CLUSTER_ZOOM = 15;
@@ -1126,6 +1130,7 @@ function renderClusters(list){
   A.clusterLayer.clearLayers();
   const z=A.map.getZoom(); const cell = z<=12 ? 0.02 : z<=13 ? 0.01 : 0.005;
   const cells = {};
+  if (A.props.length > 3000 && z >= 13){ const b = A.map.getBounds().pad(0.5); list = list.filter(p => b.contains([p.lat,p.lng])); }   // v17: only the clusters near the screen are drawn
   for (const p of list){ const key=Math.floor(p.lat/cell)+'|'+Math.floor(p.lng/(cell*1.3)); const c = cells[key] ||= { n:0, lat:0, lng:0, k:0 }; c.n++; c.lat+=p.lat; c.lng+=p.lng; if (isKnockable(p)) c.k++; }
   for (const key in cells){ const c=cells[key]; const lat=c.lat/c.n, lng=c.lng/c.n; const r = c.n>200?26: c.n>60?22: c.n>15?18:14;
     const icon = L.divIcon({ className:'', html:`<div class="cluster" style="width:${r*2}px;height:${r*2}px"><b>${c.n}</b><i>${c.k} to knock</i></div>`, iconSize:[r*2,r*2], iconAnchor:[r,r] });
