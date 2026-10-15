@@ -885,6 +885,9 @@ async function reload(){
 const STATUS_ALIASES = { uncontacted:'unknocked', new:'unknocked', untouched:'unknocked', open:'unknocked', not_knocked:'unknocked', no_answer:'not_home', nothome:'not_home', 'not-home':'not_home', call_back:'callback', 'call-back':'callback', follow_up:'callback', followup:'callback', appt:'appointment', appointment_set:'appointment', booked:'appointment', closed:'signed', sold:'signed', won:'signed', not_int:'not_interested', 'not-interested':'not_interested', no:'not_interested', dnk:'do_not_knock', do_not_contact:'do_not_knock', dnc:'do_not_knock' };
 function normStatus(s){ if (!s) return 'unknocked'; const k = String(s).trim().toLowerCase().replace(/\s+/g,'_'); if (S[k]) return k; return STATUS_ALIASES[k] || 'unknocked'; }
 function normTier(t){ if (!t) return 'none'; const k = String(t).trim().toLowerCase(); if (TIERS[k]) return k; if (/uninstall|no panel|no_panel|never install/.test(k)) return 'verified_uninstalled'; if (/install|orphan|verified|panels/.test(k)) return 'verified_installed'; if (/permit/.test(k)) return 'permit_only'; return 'none'; }
+/* v20: the portal keeps one flag (status 'bankrupt' = orphaned installer); the reason rides in installer_closed, e.g. '2025 (license revoked)' */
+const licReason = c => { const m = /\(license (\w+)\)/i.exec(c || ''); return m ? m[1].toLowerCase() : null; };
+const licTag = c => { const r = licReason(c); return r ? 'License ' + r : 'Bankrupt'; };
 function normalizeData(){
   let fixed = 0;
   for (const p of A.props){
@@ -1388,13 +1391,13 @@ function renderSheet(){
         <div class="row" style="gap:6px;flex:none">${statusChip(p.status)}<button class="back" id="sheetClose" aria-label="Close" style="padding:0 10px">Close</button></div>
       </div>
       <div class="row" style="flex-wrap:wrap;gap:6px">
-        ${p.installer_status==='bankrupt'?`<span class="tag bad">${/revok/i.test(p.installer_closed||'')?'License revoked':'Bankrupt'}</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
+        ${p.installer_status==='bankrupt'?`<span class="tag bad">${licTag(p.installer_closed)}</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
       </div>
       <div class="kv">
         <b>Owner</b><span>${esc(p.owner_name||'—')}</span>
         <b>Phone</b><span>${p.owner_phone?`<span class="num">${esc(p.owner_phone)}</span> <button class="btn sm" data-copy="${esc(p.owner_phone)}">Copy</button>`:'—'}</span>
         <b>Email</b><span style="word-break:break-all">${esc(p.owner_email||'—')}</span>
-        <b>Installer</b><span>${esc(p.installer||'—')}${p.installer_closed?` <span class="muted">· closed ${esc(p.installer_closed)}</span>`:''}</span>
+        <b>Installer</b><span>${esc(p.installer||'—')}${p.installer_closed?` <span class="muted">· ${/^\s*\(license/i.test(p.installer_closed)?'':'closed '}${esc(p.installer_closed)}</span>`:''}</span>
         <b>Finance</b><span>${esc(p.finance_co||'—')}</span>
         ${p.callback_at?`<b>Follow-up</b><span class="num">${fmtDT(p.callback_at)}</span>`:''}
         ${p.appointment_at?`<b>Appt</b><span class="num">${fmtDT(p.appointment_at)}</span>`:''}
@@ -1497,7 +1500,8 @@ async function saveKnock(){
 function openTextModal(p){
   const body=document.createElement('div'); body.className='stack';
   // v19: only say an installer is gone when the data says so
-  const closure = p.installer_status!=='bankrupt' ? ' We help homeowners review their solar contract.' : /revok/i.test(p.installer_closed||'') ? ' Since their contractor license was revoked, you may have options on that contract.' : ' Since they shut down, you may have options on that contract.';
+  const why = licReason(p.installer_closed);
+  const closure = p.installer_status!=='bankrupt' ? ' We help homeowners review their solar contract.' : why==='inactive' ? ' Since their contractor license is no longer active, you may have options on that contract.' : why ? ' Since their contractor license was '+why+', you may have options on that contract.' : ' Since they shut down, you may have options on that contract.';
   const fill = tpl => tpl.replace('{first}',firstName(p.owner_name)).replace('{rep}',firstName(A.me.name)).replace('{installer}',p.installer||'the installer').replace('{closure}', closure).replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
   body.innerHTML = `<div class="muted" style="font-size:13px">To <b class="num">${esc(p.owner_phone||'no phone on file')}</b> · opens your phone's Messages app with this text filled in</div>
     <div class="quick" id="tplQuick">${CONFIG.textTemplates.map((t,i)=>`<button data-i="${i}" class="${i===0?'on':''}">${esc(t.label)}</button>`).join('')}</div>
@@ -1927,7 +1931,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     ${CONFIG.demo?`<div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>`:''}
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v19 (35,000-house list; orphaned-installer filter fixed; texts and coach only say an installer is gone when it is).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v20 (orphaned installers show the exact reason: bankrupt or license revoked / suspended / cancelled / surrendered).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -1974,7 +1978,7 @@ function askCoach(q){
     a = `Today:\n1. ${f.overdue.length} overdue follow-up${f.overdue.length===1?'':'s'} and ${f.today.length} due today — do those first, they book at ${me.fuApptRate?Math.round(me.fuApptRate*100)+'%':'3x the rate of fresh doors'}.\n2. ${f.apptsToday.length} appointment${f.apptsToday.length===1?'':'s'} today — confirm by text now.\n3. ${kn} knockable doors in your territory. At ${me.doorsPerHour?me.doorsPerHour.toFixed(0):'10'} doors an hour, save 4–8 pm for fresh doors.\nGoal: ${A.goals.daily_knocks} doors, ${A.goals.daily_contacts} talks, ${A.goals.daily_appts} appts.`;
   } else if (/pitch|say|script|installer|open/.test(q)){
     const inst={}; A.props.filter(p=>inMyTerr(p)&&p.installer_status==='bankrupt').forEach(p=>inst[p.installer]=(inst[p.installer]||0)+1); const topInst=Object.entries(inst).sort((a,b)=>b[1]-a[1])[0];
-    a = topInst ? `Most of your orphaned-installer homes are ${topInst[0]} (${topInst[1]} homes). Open with the fact, not the offer: "${topInst[0]} is no longer there to service your system — do you know who does now?" For homes with a permit and no panels: "Are you still paying for a system that never got turned on?" Then book a 20-minute contract review. Never say "cancel your solar" at the door.` : 'No orphaned-installer homes in your territory. Open by asking how their solar system is working and who looks after it now. Book the review.';
+    a = topInst ? `Most of your orphaned-installer homes are ${topInst[0]} (${topInst[1]} homes). Open with the fact, not the offer: "I want to make sure someone is still looking after the system ${topInst[0]} installed — do you know who services it now?" For homes with a permit and no panels: "Are you still paying for a system that never got turned on?" Then book a 20-minute contract review. Never say "cancel your solar" at the door.` : 'No orphaned-installer homes in your territory. Open by asking how their solar system is working and who looks after it now. Book the review.';
   } else {
     a = `This month: ${me.doors} doors, ${me.contacts} talks (${Math.round(me.contactRate*100)}%), ${me.appts} appointments (${Math.round(me.apptRate*100)}% of talks), ${me.signed} signed. Average start ${fmtClock(me.avgStart)}, ${me.hoursPerDay.toFixed(1)} h a day. Ask me "why am I getting fewer appointments" or "when should I knock."`;
   }
