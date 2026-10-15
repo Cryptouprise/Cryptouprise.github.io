@@ -11,7 +11,7 @@
 /* Phones: never run inside the portal's frame. Inside a frame the phone treats us as a website (page pinch-zoom, the
    frame's 100vh hides the bottom bar behind the browser toolbar). Take the whole screen instead: this same URL,
    top-level - our own viewport/manifest then apply and "Add to Home Screen" installs a real full-screen app. */
-try { (function(){ var mm=window.matchMedia, coarse=!!(mm&&mm('(pointer: coarse)').matches), sw=Math.min(screen.width||9999,screen.height||9999), phone=coarse&&sw<700, framed=window.top!==window.self; /* v11: phone = touch screen narrower than 700 (works even when the phone claims to be a desktop, e.g. Chrome "Desktop site") */ if (framed && (phone || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent))) { window.top.location.replace(location.href); return; } /* a phone laying us out ~980px wide (desktop mode ignores the viewport tag) shrinks every control ~2.4x: scale back to the phone's real width */ function fit(){ var dev=(innerWidth>innerHeight)?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height), z=innerWidth/dev; document.documentElement.style.zoom=(!framed&&phone&&z>1.3)?z.toFixed(3):''; try { if (typeof A!=='undefined'&&A.map) setTimeout(function(){ A.map.invalidateSize(); },60); } catch(e){} return z; } var z0=fit(); addEventListener('resize',fit); })(); } catch (e) {}
+try { (function(){ var mm=window.matchMedia, coarse=!!(mm&&mm('(pointer: coarse)').matches), sw=Math.min(screen.width||9999,screen.height||9999), phone=coarse&&sw<700, framed=window.top!==window.self; /* v11: phone = touch screen narrower than 700 (works even when the phone claims to be a desktop, e.g. Chrome "Desktop site") */ if (framed && (phone || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent))) { window.top.location.replace(location.href); return; } /* a phone laying us out ~980px wide (desktop mode ignores the viewport tag) shrinks every control ~2.4x: scale back to the phone's real width */ function fit(){ var dev=(innerWidth>innerHeight)?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height), z=innerWidth/dev; var on=(!framed&&phone&&z>1.3); document.documentElement.style.zoom=on?z.toFixed(3):''; document.documentElement.classList.toggle('phone-zoom',on); try { if (typeof A!=='undefined'&&A.map) setTimeout(function(){ A.map.invalidateSize(); },60); } catch(e){} return z; } var z0=fit(); addEventListener('resize',fit); })(); } catch (e) {}
 </script>
 <link rel="apple-touch-icon" href="icon.png">
 <title>DoorBoss</title>
@@ -300,11 +300,11 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 .cmp .v.me{text-align:right}
 .street-lbl{font-family:var(--font-body)}
 
-@media (min-width:860px){
-  .view.pad{padding-left:max(24px,env(safe-area-inset-left,0px));padding-right:max(24px,env(safe-area-inset-right,0px))}
-  .wrap{max-width:960px;margin:0 auto}
-  .sheet{left:auto;right:16px;bottom:16px;width:440px;max-height:calc(100% - 32px);border-radius:18px}
-  .grid3{grid-template-columns:repeat(6,minmax(0,1fr))}
+@media (min-width:860px){   /* desktop layout; html.phone-zoom = a phone that was handed a desktop-width page, keep the phone layout there */
+  html:not(.phone-zoom) .view.pad{padding-left:max(24px,env(safe-area-inset-left,0px));padding-right:max(24px,env(safe-area-inset-right,0px))}
+  html:not(.phone-zoom) .wrap{max-width:960px;margin:0 auto}
+  html:not(.phone-zoom) .sheet{left:auto;right:16px;bottom:16px;width:440px;max-height:calc(100% - 32px);border-radius:18px}
+  html:not(.phone-zoom) .grid3{grid-template-columns:repeat(6,minmax(0,1fr))}
 }
 
 /* clusters at low zoom */
@@ -1808,7 +1808,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v11 (fixes desktop-sized layout on phones).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v12 (phone layout when the phone is handed a desktop-width page).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -2100,7 +2100,11 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
   #sheetBody h2{font-size:21px;line-height:1.2}
   #sheetBody .kv{font-size:15px;row-gap:8px}
 }
-#saveKnock:disabled{position:static;box-shadow:none}   /* only float Save once an outcome is picked; a greyed-out floating button would cover the outcome buttons */
+#saveKnock:disabled{position:static;box-shadow:none}
+html.phone-zoom .role-badge{display:none}
+html.phone-zoom .brand{font-size:20px}
+html.phone-zoom .topbar{gap:6px}
+html.phone-zoom .pill{padding:0 9px;gap:5px}   /* only float Save once an outcome is picked; a greyed-out floating button would cover the outcome buttons */
 .sheet:not(.show){transform:translateY(calc(100% + 80px));visibility:hidden;transition:transform .25s cubic-bezier(.2,.8,.2,1),visibility 0s linear .25s}   /* closed card fully off-screen: its top edge was covering the bottom of the tab bar (Team / Me labels) */
 .sheet.show{visibility:visible;transition:transform .25s cubic-bezier(.2,.8,.2,1),visibility 0s}
 </style>
