@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover,interactive-widget=resizes-content">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#f05a1a">
@@ -799,7 +799,7 @@ const DB = (() => {
    ============================================================ */
 const A = {
   me:null, users:[], props:[], knocks:[], appts:[], terrs:[], positions:[], goals:null, settings:null,
-  view:'map', filter:'all', mine:true, showReps:true,   // 'all' by default: a house you just knocked must stay on the map in its new color ('Knock next' hides it)
+  view:'map', filter:'all', mine:false, showReps:true,   // 'all' by default: a house you just knocked must stay on the map in its new color ('Knock next' hides it)
   myPos:null, gpsOk:false, map:null, markers:new Map(), terrLayers:new Map(), repLayers:new Map(), meMarker:null, streetLayer:null,
   tiles:null, schematic:false, draw:null, sheetProp:null, pendingStatus:null,
   teamTab:'board', period:'week', boardMetric:'knocks', online:navigator.onLine,
@@ -809,6 +809,7 @@ const byId = (arr, id) => arr.find(x => x.id===id);
 const userName = id => (byId(A.users,id)||{}).name || '—';
 const userColor = id => (byId(A.users,id)||{}).color || '#888';
 const isMgr = () => A.me && (A.me.role==='manager' || A.me.role==='admin');
+const isMine = p => !!(A.me && p && (p.last_knock_by===A.me.id || (A.me.email && p.last_knock_by===A.me.email)));   // server writes the rep's email, the app writes the id
 const myTerrs = () => A.terrs.filter(t => (t.assigned_user_ids||[]).includes(A.me.id));
 const inMyTerr = p => { const ts = myTerrs(); if (!ts.length) return true; return ts.some(t => t.id===p.territory_id || pointInPoly([p.lat,p.lng], t.polygon)); };
 const isKnockable = p => {
@@ -839,7 +840,7 @@ function normalizeData(){
   for (const k of A.knocks){ const st = normStatus(k.status); if (st !== k.status){ k.status = st; fixed++; } for (const f of ['created_at','callback_at','appointment_at']) if (typeof k[f] === 'string') k[f] = new Date(k[f]).getTime(); }
   if (fixed && !A._normWarned){ A._normWarned = true; console.warn(`DoorBoss: normalized ${fixed} field(s) from the backend to the app vocabulary (status/tier). Fix the data so this stops.`); }
 }
-const apptOf = p => p && p.appointment_id ? byId(A.appts, p.appointment_id) : null;
+const apptOf = p => { if (!p) return null; const byLink = p.appointment_id && byId(A.appts, p.appointment_id); if (byLink) return byLink; return A.appts.filter(a => a.property_id===p.id && a.status!=='cancelled' && a.status!=='rescheduled').sort((x,y)=>(y.created_at||0)-(x.created_at||0))[0] || null; };
 const APPT_LABEL = { scheduled:'Scheduled', confirmed:'Confirmed', held:'Held', no_show:'No-show', rescheduled:'Rescheduled', cancelled:'Cancelled' };
 const RESULT_LABEL = { signed:'Signed', lost:'Lost', follow_up:'Follow-up' };
 const apptChip = ap => { if (!ap) return ''; const needs = (ap.status==='scheduled'||ap.status==='confirmed') && ap.at < now()-30*60000; const st = needs ? 'needs_outcome' : ap.status; const lbl = needs ? 'Needs outcome' : (APPT_LABEL[ap.status] + (ap.result ? ' · '+RESULT_LABEL[ap.result] : '')); return `<span class="a-chip ${st}">${lbl}</span>`; };
@@ -854,7 +855,7 @@ function openModal({ title, body, actions=[] }){
   box.innerHTML = `<h3>${esc(title)}</h3><div class="mb"></div><div class="acts"></div>`;
   const mb=$('.mb',box); if (typeof body==='string') mb.innerHTML=body; else mb.appendChild(body);
   const acts=$('.acts',box);
-  actions.forEach(a => { const b=document.createElement('button'); b.className='btn'+(a.primary?' primary':'')+(a.danger?' danger':''); b.textContent=a.label; b.onclick=()=>{ const r=a.onClick?a.onClick():true; if (r!==false) closeModal(); }; acts.appendChild(b); });
+  actions.forEach(a => { const b=document.createElement('button'); b.className='btn'+(a.primary?' primary':'')+(a.danger?' danger':''); b.textContent=a.label; b.onclick=async()=>{ if (b.disabled) return; b.disabled=true; let r=true; try { r = a.onClick ? await a.onClick() : true; } catch(e){ toast('Could not save: '+(e && e.message || e)); b.disabled=false; return; } b.disabled=false; if (r!==false) closeModal(); }; acts.appendChild(b); });
   if (!actions.length){ const b=document.createElement('button'); b.className='btn'; b.textContent='Close'; b.onclick=closeModal; acts.appendChild(b); }
   m.hidden=false;
 }
@@ -1006,6 +1007,7 @@ function initMap(){
   $('#fabAdd').onclick = () => { if (!A.myPos) return toast('No position yet'); openAddHouse(A.myPos); };
   $('#fabRoute').onclick = () => { if (A.route) { confirmBox('End route?', `${A.route.plan.length-A.route.i} doors left on it.`, endRoute, 'End route'); } else startRoute(); };
   map.on('zoomend', () => { renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
+  map.on('moveend', () => { if (map.getZoom() >= 18) renderPins(); });
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
@@ -1083,7 +1085,7 @@ function renderPins(){
 }
 /* house number beside the pin once the rep is at street level — the basemap does not draw them */
 function labelPin(m, p, z){
-  const want = z >= 18;
+  const want = z >= 18 && A.map.getBounds().pad(0.3).contains([p.lat,p.lng]);
   if (want && !m.getTooltip()){ const num = String(p.address||'').trim().split(/\s+/)[0]; if (/^\d/.test(num)) m.bindTooltip(num, { permanent:true, direction:'right', offset:[6,0], className:'pin-label', interactive:false }); }
   else if (!want && m.getTooltip()) m.unbindTooltip();
 }
@@ -1135,12 +1137,12 @@ function updateNext(){
   const card=$('#nextCard');
   if (A.route){ showNextRouteCard(); return; }
   if (!A.myPos || A.draw){ card.hidden=true; A.nextId=null; return; }
-  const cand = A.props.filter(p => (isMgr() && !A.mine ? true : inMyTerr(p)) && p.status!=='do_not_knock');
+  const cand = A.props.filter(p => (!A.mine ? true : inMyTerr(p)) && p.status!=='do_not_knock');
   const due = cand.filter(p => p.status==='callback' && p.callback_at && p.callback_at <= now()+30*60000);
   let pickP=null, why='';
   const nearest = arr => arr.map(p => ({p, d:haversine(A.myPos,[p.lat,p.lng])})).sort((a,b)=>a.d-b.d)[0];
   if (due.length){ const n=nearest(due); pickP=n.p; why='Callback due · '+fmtDist(n.d); }
-  else { const kn = cand.filter(isKnockable); const n=nearest(kn); if (n){ pickP=n.p; why=(S[n.p.status].label)+' · '+fmtDist(n.d); } }
+  else { const kn = cand.filter(p => isKnockable(p) && !(p.status==='callback' && p.callback_at && p.callback_at > now()+30*60000) && !(p.status!=='unknocked' && p.last_knock_at && now()-p.last_knock_at < 4*3600000)); const n=nearest(kn); if (n){ pickP=n.p; why=(S[n.p.status].label)+' · '+fmtDist(n.d); } }
   if (!pickP){ card.hidden=true; A.nextId=null; drawNextRing(null); return; }
   A.nextId=pickP.id; card.hidden=false; drawNextRing(pickP);
   $('#nextSw').style.background = S[pickP.status].color;
@@ -1244,7 +1246,7 @@ function planRoute(start, props, opts={}){
   return out;
 }
 function routeCandidates(){
-  const inTerr = isMgr() && !A.mine ? A.props : A.props.filter(inMyTerr);
+  const inTerr = !A.mine ? A.props : A.props.filter(inMyTerr);
   return inTerr.filter(p => p.status!=='do_not_knock' && (isKnockable(p)));
 }
 function startRoute(){
@@ -1282,7 +1284,7 @@ function endRoute(){ A.route=null; drawRoute(); updateNext(); toast('Route clear
 function openSheet(id){
   const p=byId(A.props,id); if (!p) return;
   A.sheetProp=p; A.pendingStatus=null; A.pendingWhen=null; A.pendingPhotos=[];
-  renderSheet(); $('#backdrop').hidden=false; requestAnimationFrame(()=>{ $('#backdrop').classList.add('show'); $('#sheet').classList.add('show'); });
+  renderSheet(); $('#backdrop').hidden=false; $('#backdrop').classList.toggle('block', A.view!=='map'); requestAnimationFrame(()=>{ $('#backdrop').classList.add('show'); $('#sheet').classList.add('show'); });
 }
 function closeSheet(){ $('#backdrop').classList.remove('show'); $('#sheet').classList.remove('show'); setTimeout(()=>{ $('#backdrop').hidden=true; },220); A.sheetProp=null; }
 $('#backdrop').onclick = closeSheet; $('#backdrop').addEventListener('touchend', e => { e.preventDefault(); closeSheet(); }, { passive:false });
@@ -1321,14 +1323,14 @@ function renderSheet(){
         <button class="btn sm" id="shBrief">AI door brief</button>
       </div>
       <div id="briefBox" hidden></div>
-      ${(() => { const ap = apptOf(p); if (!ap) return ''; const open = ap.status==='scheduled'||ap.status==='confirmed'; const past = ap.at < now()-30*60000;
+      ${(() => { const ap = apptOf(p); if (!ap) return ''; const open = ap.status==='scheduled'||ap.status==='confirmed'; const past = ap.at <= now();
         return `<div class="appt-card"><div class="row between"><div><div class="eyebrow">Appointment</div><div class="when num">${fmtDT(ap.at)}</div></div>${apptChip(ap)}</div>
           <div class="muted" style="font-size:12px">Set by ${esc(userName(ap.user_id))} · ${ap.ghl_event_id?'on the GHL calendar':'syncing to GHL calendar'}${ap.note?' · '+esc(ap.note):''}</div>
           ${open ? `<div class="quick" id="apActs">${ap.status==='scheduled'?'<button data-ap="confirmed">Confirmed</button>':''}${past?'<button data-ap="held">Held</button><button data-ap="no_show">No-show</button>':''}<button data-ap="rescheduled">Reschedule</button><button data-ap="cancelled">Cancel</button></div>` : ''}
           <div id="apResult" hidden><div class="eyebrow" style="margin-bottom:6px">How did it go?</div><div class="quick"><button data-res="signed">Signed</button><button data-res="follow_up">Needs follow-up</button><button data-res="lost">Lost</button></div></div>
           <div id="apWhen" hidden><input type="datetime-local" id="apWhenInput"><button class="btn sm primary" id="apWhenSave" style="margin-top:6px">Save new time</button></div>
         </div>`; })()}
-      ${sel==='appointment'||apptOf(p)?'':`<button class="btn primary block" id="bookAppt">📅 Book appointment · pick a day &amp; time</button>`}
+      ${sel==='appointment'||apptOf(p)||p.status==='appointment'?'':`<button class="btn primary block" id="bookAppt">📅 Book appointment · pick a day &amp; time</button>`}
       <div>
         <div class="eyebrow" style="margin-bottom:8px">Log this door</div>
         <div class="status-grid">
@@ -1341,7 +1343,7 @@ function renderSheet(){
         </div>
         <input type="datetime-local" id="whenInput" value="${A.pendingWhen?toLocalInput(A.pendingWhen):''}"></div>`:''}
       <label class="f">Note<textarea id="noteInput" placeholder="${sel==='signed'?'Docs uploaded? Both owners signed?':'What they said, who was home…'}"></textarea></label>
-      <div class="photo-row" id="photoRow">${(A.pendingPhotos||[]).map((d,i)=>`<img src="${d}" alt="Photo ${i+1}">`).join('')}<label class="add">Add photo<input type="file" accept="image/*" capture="environment" id="photoInput" hidden></label></div>
+      <div class="photo-row" id="photoRow">${(A.pendingPhotos||[]).map((d,i)=>`<img src="${d}" alt="Photo ${i+1}">`).join('')}</div>
       <button class="btn primary block" id="saveKnock" ${sel?'':'disabled'}>${sel? 'Save · '+esc(S[sel].label) : 'Pick an outcome'}</button>
       ${hist.length?`<div><div class="eyebrow" style="margin-bottom:8px">History · ${hist.length} knock${hist.length===1?'':'s'}</div><div class="hist">${hist.slice(0,8).map(k=>`<div class="h"><b>${esc(S[k.status].label)}</b> <span class="muted">· ${esc(userName(k.user_id))} · ${fmtDT(k.created_at)}</span>${k.note?`<div class="muted">${esc(k.note)}</div>`:''}${(k.photos&&k.photos.length)||k.photo_url?`<div class="photo-row" style="margin-top:4px">${(k.photos||[k.photo_url]).map(u=>`<img src="${u}" alt="Door photo">`).join('')}</div>`:''}</div>`).join('')}</div></div>`:`<div class="muted" style="font-size:13px">No knocks yet. ${tier.note?esc(tier.note):''}</div>`}
     </div>`;
@@ -1349,7 +1351,7 @@ function renderSheet(){
   $$('[data-copy]',el).forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{ A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
   const ba=$('#bookAppt'); if (ba) ba.onclick=()=>{ A.pendingStatus='appointment'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
-  const qw=$('#quickWhen'); if (qw) qw.onclick=e=>{ const b=e.target.closest('button'); if (!b) return; let t; if (b.dataset.min) t=now()+b.dataset.min*60000; if (b.dataset.tmr){ t=startOfDay(now())+DAY+b.dataset.tmr*3600000; } if (b.dataset.days){ t=startOfDay(now())+b.dataset.days*DAY+(sel==='callback'?17:18)*3600000; } A.pendingWhen=t; $('#whenInput').value=toLocalInput(t); $$('#quickWhen button').forEach(x=>x.classList.toggle('on',x===b)); };
+  const qw=$('#quickWhen'); if (qw) qw.onclick=e=>{ const b=e.target.closest('button'); if (!b) return; let t; if (b.dataset.min) t=now()+b.dataset.min*60000; if (b.dataset.tmr || b.dataset.days){ const d=new Date(); d.setDate(d.getDate()+(b.dataset.tmr?1:+b.dataset.days)); d.setHours(b.dataset.tmr?+b.dataset.tmr:(sel==='callback'?17:18),0,0,0); t=d.getTime(); } A.pendingWhen=t; $('#whenInput').value=toLocalInput(t); $$('#quickWhen button').forEach(x=>x.classList.toggle('on',x===b)); };
   const wi=$('#whenInput'); if (wi) wi.onchange=()=>{ A.pendingWhen = wi.value ? new Date(wi.value).getTime() : null; };
   $('#saveKnock').onclick = saveKnock;
   const pi=$('#photoInput'); if (pi) pi.onchange = async () => { const f=pi.files[0]; if (!f) return; try { const d=await compressImage(f, 1280, 0.72); (A.pendingPhotos ||= []).push(d); const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; } catch(e){ toast('Could not read that photo'); } };
@@ -1366,8 +1368,10 @@ function renderSheet(){
   }
 }
 async function saveKnock(){
-  const p=A.sheetProp; const st=A.pendingStatus; if (!p||!st) return;
+  const p=A.sheetProp; const st=A.pendingStatus; if (!p||!st||A.savingKnock) return;
   if ((st==='callback'||st==='appointment') && !A.pendingWhen){ toast('Pick a time'); return; }
+  A.savingKnock=true; A.pendingStatus=null; const sb=$('#saveKnock'); if (sb) sb.disabled=true;
+  try {
   const k = { property_id:p.id, user_id:A.me.id, status:st, note:$('#noteInput').value.trim(), lat:A.myPos?A.myPos[0]:null, lng:A.myPos?A.myPos[1]:null, accuracy_m:A.gpsAcc||null, callback_at: st==='callback'?A.pendingWhen:null, appointment_at: st==='appointment'?A.pendingWhen:null, source:'door', photos:(A.pendingPhotos||[]).slice(0,3) };
   await DB.addKnock(k); A.pendingPhotos=[];
   if (typeof routeAdvance==='function') routeAdvance(p.id);
@@ -1376,17 +1380,18 @@ async function saveKnock(){
   const msg = { not_home:'Logged · not home', callback:'Callback set', interested:'Interested · synced to GHL', appointment:'Appointment set · pushed to GHL', signed:'Signed · opportunity moved in GHL', not_interested:'Logged', do_not_knock:'Marked do not knock' }[st];
   toast(msg||'Saved');
   flushQueue();
+  } finally { A.savingKnock=false; }
 }
 function openTextModal(p){
   const body=document.createElement('div'); body.className='stack';
   const fill = tpl => tpl.replace('{first}',firstName(p.owner_name)).replace('{rep}',firstName(A.me.name)).replace('{installer}',p.installer||'the installer').replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
-  body.innerHTML = `<div class="muted" style="font-size:13px">To <b class="num">${esc(p.owner_phone||'no phone on file')}</b> · sent through GHL from the Solar Freedom number</div>
+  body.innerHTML = `<div class="muted" style="font-size:13px">To <b class="num">${esc(p.owner_phone||'no phone on file')}</b> · opens your phone's Messages app with this text filled in</div>
     <div class="quick" id="tplQuick">${CONFIG.textTemplates.map((t,i)=>`<button data-i="${i}" class="${i===0?'on':''}">${esc(t.label)}</button>`).join('')}</div>
     <textarea id="txtBody" style="min-height:110px">${esc(fill(CONFIG.textTemplates[0].body))}</textarea>`;
-  openModal({ title:'Text '+esc(firstName(p.owner_name)), body, actions:[{label:'Cancel'},{label:'Send',primary:true,onClick:async()=>{
+  openModal({ title:'Text '+esc(firstName(p.owner_name)), body, actions:[{label:'Cancel'},{label:'Open in Messages',primary:true,onClick:()=>{
     if (!p.owner_phone){ toast('No phone on file'); return false; }
-    await DB.sendMessage({ property_id:p.id, user_id:A.me.id, channel:'sms', direction:'out', to:p.owner_phone, body:$('#txtBody').value });
-    toast('Queued to GHL conversations'); updateSyncPill(); flushQueue();
+    const num=String(p.owner_phone).replace(/[^\d+]/g,''); const sep=/iPhone|iPad/i.test(navigator.userAgent)?'&':'?';
+    (window.top||window).location.href='sms:'+num+sep+'body='+encodeURIComponent($('#txtBody').value);
   }}] });
   $('#tplQuick').onclick=e=>{ const b=e.target.closest('button'); if(!b) return; $$('#tplQuick button').forEach(x=>x.classList.toggle('on',x===b)); $('#txtBody').value=fill(CONFIG.textTemplates[b.dataset.i].body); };
 }
@@ -1407,21 +1412,24 @@ function compressImage(file, maxPx=1280, quality=0.72){
 function followItems(){
   const mineOnly = !isMgr();
   const t0=startOfDay(now()), t1=t0+DAY;
-  const items = A.props.filter(p => (p.status==='callback'&&p.callback_at) || (p.status==='appointment'&&p.appointment_at)).filter(p => !mineOnly || p.last_knock_by===A.me.id || inMyTerr(p));
-  const cb = items.filter(p=>p.status==='callback'), ap = items.filter(p=>p.status==='appointment');
+  const mine = p => !mineOnly || isMine(p) || inMyTerr(p);
+  const cb = A.props.filter(p => p.status==='callback' && p.callback_at && mine(p));
+  const openAp = p => { const a=apptOf(p); return a && (a.status==='scheduled'||a.status==='confirmed') ? a : null; };
+  const ap = A.props.filter(p => { const a=openAp(p); return a && (!mineOnly || a.user_id===A.me.id || mine(p)); });
+  const at = p => openAp(p).at;
   return {
     overdue: cb.filter(p=>p.callback_at<now()).sort((a,b)=>a.callback_at-b.callback_at),
     today: cb.filter(p=>p.callback_at>=now()&&p.callback_at<t1).sort((a,b)=>a.callback_at-b.callback_at),
-    apptsToday: ap.filter(p=>p.appointment_at>=t0&&p.appointment_at<t1).sort((a,b)=>a.appointment_at-b.appointment_at),
+    apptsToday: ap.filter(p=>at(p)>=t0&&at(p)<t1).sort((a,b)=>at(a)-at(b)),
     upcoming: cb.filter(p=>p.callback_at>=t1&&p.callback_at<t1+7*DAY).sort((a,b)=>a.callback_at-b.callback_at),
-    apptsUpcoming: ap.filter(p=>p.appointment_at>=t1).sort((a,b)=>a.appointment_at-b.appointment_at),
-    stale: A.props.filter(p=>p.status==='interested' && p.last_knock_at && now()-p.last_knock_at>2*DAY && (!mineOnly||p.last_knock_by===A.me.id)).sort((a,b)=>a.last_knock_at-b.last_knock_at)
+    apptsUpcoming: ap.filter(p=>at(p)>=t1&&at(p)<t1+7*DAY).sort((a,b)=>at(a)-at(b)),
+    stale: A.props.filter(p=>p.status==='interested' && p.last_knock_at && now()-p.last_knock_at>2*DAY && (!mineOnly||isMine(p))).sort((a,b)=>a.last_knock_at-b.last_knock_at)
   };
 }
 function updateFollowBadge(){ const f=followItems(); const n=f.overdue.length+f.today.length+f.apptsToday.length; const b=$('#followCnt'); b.hidden=!n; b.textContent=n; }
 function renderFollow(){
   const f=followItems(); const w=$('#followWrap');
-  const row = (p, when, label) => `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:${S[p.status].color};flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${label} · ${esc(userName(p.last_knock_by))}${(A.knocks.filter(k=>k.property_id===p.id).slice(-1)[0]||{}).note?' · '+esc(A.knocks.filter(k=>k.property_id===p.id).slice(-1)[0].note):''}</div></div><span class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</span></div>`;
+  const row = (p, when, label) => `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:${S[p.status].color};flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${label} · ${esc(userName(p.last_knock_by))}${(()=>{ const k=A.knocks.filter(k=>k.property_id===p.id).reduce((a,k)=>!a||(k.created_at||0)>(a.created_at||0)?k:a,null); return k&&k.note?' · '+esc(k.note):''; })()}</div></div><span class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</span></div>`;
   const sec = (title, arr, fn, empty) => `<div class="card"><div class="row between" style="margin-bottom:4px"><h3 style="font-size:18px">${title}</h3><span class="muted num">${arr.length}</span></div><div class="list">${arr.length?arr.map(fn).join(''):`<div class="muted" style="font-size:13px;padding:8px 0">${empty}</div>`}</div></div>`;
   const mineOnly = !isMgr();
   const myAppts = A.appts.filter(a => !mineOnly || a.user_id===A.me.id);
@@ -1435,7 +1443,7 @@ function renderFollow(){
     ${sec('Appointments today', f.apptsToday.map(p=>apptOf(p)).filter(Boolean), a=>arow(a, fmtTime(a.at)), 'No appointments today.')}
     ${sec('Callbacks today', f.today, p=>row(p, fmtTime(p.callback_at), 'Callback'), 'Nothing due. Go knock.')}
     ${sec('Interested, going cold', f.stale, p=>row(p, fmtRel(p.last_knock_at), 'Interested · no touch since'), 'Nobody slipping.')}
-    ${sec('Next 7 days', f.upcoming.concat(f.apptsUpcoming).sort((a,b)=>(a.callback_at||a.appointment_at)-(b.callback_at||b.appointment_at)), p=>row(p, fmtDT(p.callback_at||p.appointment_at), p.status==='appointment'?'Appt · '+(apptOf(p)?APPT_LABEL[apptOf(p).status]:''):'Callback'), 'Nothing scheduled.')}
+    ${(()=>{ const items = f.upcoming.map(p=>({p,t:p.callback_at,ap:false})).concat(f.apptsUpcoming.map(p=>({p,t:apptOf(p).at,ap:true}))).sort((a,b)=>a.t-b.t); return sec('Next 7 days', items, x=>row(x.p, fmtDT(x.t), x.ap?'Appt · '+APPT_LABEL[apptOf(x.p).status]:'Callback'), 'Nothing scheduled.'); })()}
     ${recent.length?sec('Recent appointment outcomes', recent, a=>arow(a, fmtDate(a.at)), ''):''}
   </div>`;
   w.onclick = e => { const r=e.target.closest('[data-open]'); if (r) openSheet(r.dataset.open); };
@@ -1501,7 +1509,7 @@ function repSummary(uid, period){
   const rate = (arr) => arr.length ? arr.filter(k=>S[k.status]&&S[k.status].contact).length/arr.length : 0;
   const myAppts = A.appts.filter(a => a.user_id===uid && a.at>=t0 && a.at<t1 && a.at<now());
   const held = myAppts.filter(a=>a.status==='held').length, noShow = myAppts.filter(a=>a.status==='no_show').length;
-  const overdue = A.props.filter(p => p.status==='callback' && p.last_knock_by===uid && p.callback_at && p.callback_at < now()).length;
+  const uEmail = (byId(A.users,uid)||{}).email; const overdue = A.props.filter(p => p.status==='callback' && (p.last_knock_by===uid || (uEmail && p.last_knock_by===uEmail)) && p.callback_at && p.callback_at < now()).length;
   // appointment rate on follow-up knocks specifically (the lever behind "follow-ups per day")
   const prevS = {}; let fuK=0, fuA=0; for (const k of A.knocks.slice().sort((x,y)=>x.created_at-y.created_at)){ const pv=prevS[k.property_id]; if (k.user_id===uid && k.created_at>=t0 && k.created_at<t1 && (k.source||'door')==='door' && (pv==='callback'||pv==='interested'||pv==='appointment')){ fuK++; if (k.status==='appointment') fuA++; } prevS[k.property_id]=k.status; }
   return { uid, name:userName(uid), rows, days, doors, contacts, appts, signed, followups, hours, early, evening, fuApptRate: fuK?fuA/fuK:null,
@@ -1545,7 +1553,7 @@ function insights(perRep, team, period){
   const best = team.byHour.map((n,h)=>({h, n, c:team.contactByHour[h], r:n?team.contactByHour[h]/n:0})).filter(x=>x.n>=15).sort((a,b)=>b.r-a.r)[0];
   if (best) out.push({ k:'info', ic:'⏱', t:`Best hour: ${fmtHour(best.h)} · ${pct(best.c,best.n)} answer`, s:'Stack the schedule around it. Mornings are for callbacks and texts.' });
   for (const t of A.terrs){
-    const ps=A.props.filter(p=>p.territory_id===t.id); if (!ps.length) continue;
+    const ps=A.props.filter(p=>p.territory_id===t.id || pointInPoly([p.lat,p.lng], t.polygon||[])); if (!ps.length) continue;
     const covered=ps.filter(p=>p.status!=='unknocked').length; const left=ps.filter(isKnockable).length;
     if (covered/ps.length>0.85 && left<10) out.push({ k:'info', ic:'▦', t:`${t.name} is ${pct(covered,ps.length)} covered`, s:`${left} knockable doors left. Draw the next territory or import the next list.` });
     if (!(t.assigned_user_ids||[]).length && left>20) out.push({ k:'warn', ic:'▦', t:`${t.name} has nobody assigned`, s:`${left} knockable doors sitting idle.` });
@@ -1660,7 +1668,7 @@ function renderStats(perRep, team){
 }
 function renderTerrs(){
   const mine = id => (byId(A.terrs,id).assigned_user_ids||[]).includes(A.me.id);
-  const rows = A.terrs.map(t=>{ const ps=A.props.filter(p=>p.territory_id===t.id); const covered=ps.filter(p=>p.status!=='unknocked').length; const left=ps.filter(isKnockable).length; const last=Math.max(0,...ps.map(p=>p.last_knock_at||0)); const unassigned=!(t.assigned_user_ids||[]).length;
+  const rows = A.terrs.map(t=>{ const ps=A.props.filter(p=>p.territory_id===t.id || pointInPoly([p.lat,p.lng], t.polygon||[])); const covered=ps.filter(p=>p.status!=='unknocked').length; const left=ps.filter(isKnockable).length; const last=Math.max(0,...ps.map(p=>p.last_knock_at||0)); const unassigned=!(t.assigned_user_ids||[]).length;
     const action = isMgr() ? `<button class="btn sm" data-tmenu="${t.id}">Edit</button>` : (mine(t.id) ? `<span class="tag good">Mine</span>` : (unassigned ? `<button class="btn sm primary" data-claim="${t.id}">Claim</button>` : ''));
     return `<div class="card"><div class="row between"><div class="row"><span class="sw" style="width:14px;height:14px;border-radius:4px;background:${t.color}"></span><h3 style="font-size:18px">${esc(t.name)}</h3></div>${action}</div>
       <div class="bar" style="margin:10px 0 6px"><i style="width:${ps.length?Math.round(100*covered/ps.length):0}%;background:${t.color}"></i></div>
@@ -1674,7 +1682,7 @@ function renderData(){
     <div class="card stack"><h3 style="font-size:18px">Import a list</h3><div class="muted" style="font-size:13px">CSV with columns: address, city, state, zip, lat, lng, owner_name, owner_phone, owner_email, installer, installer_status, installer_closed, tier, permit_year, system_kw, finance_co, source. Rows without lat/lng are skipped (geocode them first).</div><input type="file" id="csvFile" accept=".csv,text/csv"><div id="csvResult" class="muted" style="font-size:13px"></div></div>
     <div class="card stack"><h3 style="font-size:18px">Export</h3><div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" data-act="exportKnocks">Knocks CSV</button><button class="btn" data-act="exportProps">Properties CSV</button></div></div>
     <div class="card stack"><h3 style="font-size:18px">GHL sync</h3><div class="muted" style="font-size:13px">${q?q+' item'+(q===1?'':'s')+' waiting to sync.':'Everything synced.'} Interested, callback, appointment and signed outcomes upsert the contact in Solar Freedom, tag it, and move the opportunity. See ghl-sync.md.</div><button class="btn sm" data-act="flush">Sync now</button></div>
-    <div class="card stack"><h3 style="font-size:18px">Demo data</h3><div class="muted" style="font-size:13px">This preview runs on sample data for Aurora, CO. Reset restores it.</div><button class="btn sm danger" data-act="reset">Reset demo data</button></div>
+    ${CONFIG.demo?`<div class="card stack"><h3 style="font-size:18px">Demo data</h3><div class="muted" style="font-size:13px">This preview runs on sample data for Aurora, CO. Reset restores it.</div><button class="btn sm danger" data-act="reset">Reset demo data</button></div>`:''}
   </div>`;
 }
 function bindTeam(body){
@@ -1712,7 +1720,8 @@ async function importCsv(file){
     const lat=parseFloat(g('lat')||g('latitude')), lng=parseFloat(g('lng')||g('lon')||g('longitude'));
     if (!isFinite(lat)||!isFinite(lng)){ skipped++; continue; }
     const tierRaw=g('tier').toLowerCase(); const tier = tierRaw.includes('uninst')||tierRaw.includes('no_panel')||tierRaw.includes('no panel') ? 'verified_uninstalled' : tierRaw.includes('inst')||tierRaw.includes('panel') ? 'verified_installed' : tierRaw.includes('permit') ? 'permit_only' : 'none';
-    list.push({ lat, lng, address:g('address')||g('street'), city:g('city'), state:g('state')||'CO', zip:g('zip')||g('postal_code'), owner_name:g('owner_name')||g('owner')||[g('first_name'),g('last_name')].filter(Boolean).join(' '), owner_phone:g('owner_phone')||g('phone')||g('mobile'), owner_email:g('owner_email')||g('email'), installer:g('installer')||g('contractor')||g('installer_of_record'), installer_status:g('installer_status')||'bankrupt', installer_closed:g('installer_closed')||g('bankruptcy_year'), tier, permit_year:g('permit_year')||(g('permit_date')||'').slice(0,4), system_kw:g('system_kw')||g('kw'), finance_co:g('finance_co')||g('lender'), source:g('source')||file.name });
+    const addr = g('address')||g('street')||g('property_address')||g('street_address')||g('site_address')||g('address1')||g('address_line_1')||g('full_address'); if (!addr){ skipped++; continue; }
+    list.push({ lat, lng, address:addr, city:g('city')||g('property_city'), state:g('state')||g('property_state')||'CO', zip:g('zip')||g('postal_code')||g('zip_code')||g('zipcode')||g('postal')||g('property_zip'), owner_name:g('owner_name')||g('owner')||[g('first_name'),g('last_name')].filter(Boolean).join(' '), owner_phone:g('owner_phone')||g('phone')||g('mobile'), owner_email:g('owner_email')||g('email'), installer:g('installer')||g('contractor')||g('installer_of_record'), installer_status:g('installer_status')||'bankrupt', installer_closed:g('installer_closed')||g('bankruptcy_year'), tier, permit_year:g('permit_year')||(g('permit_date')||'').slice(0,4), system_kw:g('system_kw')||g('kw'), finance_co:g('finance_co')||g('lender'), source:g('source')||file.name });
   }
   const res=await DB.upsertProperties(list); await reload(); renderPins(); renderTerritories();
   $('#csvResult').textContent = `${res.added} added, ${res.updated} updated${skipped?', '+skipped+' skipped (no lat/lng)':''}.`; toast(`Imported ${res.added+res.updated}`);
@@ -1793,7 +1802,7 @@ function renderMeView(){
       <div class="q"><input type="text" id="coachQ" placeholder="Ask anything about your doors"><button class="btn sm primary" id="coachAsk">Ask</button></div>
       <div class="a" id="coachA" hidden></div></div>
     <div class="card stack"><h3 style="font-size:18px">Reminders</h3><div class="row between"><span>Callbacks 15 min before · appointments 60 min before · outcome nudges</span><span class="muted" style="font-size:12px;white-space:nowrap">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'On':'Off'}</span></div><div class="muted" style="font-size:12px">Shown while the app is open. Turn on notifications to get them in the background too; the office still texts you for anything you miss.</div><button class="btn sm" data-act="enablePush">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'Notifications are on':'Turn on notifications'}</button></div>
-    ${A.me.role==='admin'||A.me.role==='manager'?`<div class="card stack"><h3 style="font-size:18px">Users</h3><div class="list" id="userList"></div><button class="btn sm" data-act="addUser">Add a rep</button></div>`:''}
+    ${A.me.role==='admin'?`<div class="card stack"><h3 style="font-size:18px">Users</h3><div class="list" id="userList"></div><button class="btn sm" data-act="addUser">Add a rep</button></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">AI assistant</h3><div class="muted" style="font-size:13px">Use the company model, or plug in your own. Your key is stored encrypted on the server and used only for your briefs, drafts and coaching.</div>
       <div class="grid2"><label class="f">Provider<select id="aiProv"><option value="company">Company default</option><option value="openai">OpenAI (ChatGPT)</option><option value="anthropic">Anthropic (Claude)</option><option value="google">Google (Gemini)</option></select></label><label class="f">API key<input type="text" id="aiKey" placeholder="sk-…" autocomplete="off"></label></div>
       <button class="btn sm" data-act="saveAi">Save AI settings</button></div>
@@ -1802,7 +1811,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v12 (phone layout when the phone is handed a desktop-width page).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v13 (zero-error sweep fixes).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -1931,9 +1940,9 @@ function startGps(){
       if (c.accuracy > 150){ GPS.badFixes++; if (GPS.badFixes < 3) return; }          // ignore a couple of wild fixes (cell-tower)
       GPS.badFixes=0; got=true; GPS.on=true;
       setMyPos([c.latitude,c.longitude], true, { acc:c.accuracy, heading:c.heading, speed:c.speed });
-      if (!A.centered){ A.centered=true; const near = A.props.some(p => haversine(A.myPos,[p.lat,p.lng]) < 1200); if (near) A.map.setView(A.myPos,17); else if (A.props.length) { const b=L.latLngBounds((A.me && myTerrs().length ? A.props.filter(inMyTerr) : A.props).map(p=>[p.lat,p.lng])); A.map.fitBounds(b.pad(0.08),{maxZoom:17,animate:false}); toast('You are '+fmtDist(Math.min(...A.props.map(p=>haversine(A.myPos,[p.lat,p.lng]))))+' from your nearest door. Showing the territory.'); } else A.map.setView(A.myPos,17); }
+      if (!A.centered){ A.centered=true; const near = A.props.some(p => haversine(A.myPos,[p.lat,p.lng]) < 1200); if (near) A.map.setView(A.myPos,17); else if (A.props.length) { const mineList = A.me && myTerrs().length ? A.props.filter(inMyTerr) : []; const b=L.latLngBounds((mineList.length ? mineList : A.props).map(p=>[p.lat,p.lng])); A.map.fitBounds(b.pad(0.08),{maxZoom:17,animate:false}); toast('You are '+fmtDist(Math.min(...A.props.map(p=>haversine(A.myPos,[p.lat,p.lng]))))+' from your nearest door. Showing the territory.'); } else A.map.setView(A.myPos,17); }
     }, fail, { enableHighAccuracy:true, maximumAge:3000, timeout:15000 });
-    setTimeout(()=>{ if (!got) fail(null); }, 16000);
+    clearTimeout(GPS.failT); const myWatch = GPS.watchId; GPS.failT = setTimeout(()=>{ if (!got && GPS.watchId===myWatch) fail(null); }, 16000);
   } catch(e){ fail(e); }
   requestWake();
 }
@@ -2018,7 +2027,7 @@ function reminderTick(){
   if (!A.me) return;
   const t=now(); const mineOnly = !isMgr();
   for (const p of A.props){
-    if (p.status==='callback' && p.callback_at && (!mineOnly || p.last_knock_by===A.me.id)){
+    if (p.status==='callback' && p.callback_at && (!mineOnly || isMine(p))){
       const dt=p.callback_at-t; if (dt>0 && dt<=15*60000) remind('cb:'+p.id+':'+p.callback_at, 'Callback in '+Math.round(dt/60000)+' min', p.address+' · '+firstName(p.owner_name), p.id);
       if (dt<0 && dt>-5*60000) remind('cbd:'+p.id+':'+p.callback_at, 'Callback is now', p.address+' · '+firstName(p.owner_name), p.id);
     }
@@ -2055,6 +2064,7 @@ async function start(snap){
 }
 if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start); else start((window.claude && window.claude.hot && window.claude.hot.data) || {});
 </script>
+<script>document.addEventListener('gesturestart', function(e){ if (!(e.target && e.target.closest && e.target.closest('.leaflet-container'))) e.preventDefault(); }, { passive:false });</script>
 <style id="phone-app">
 /* Phone = app, not website (Charles 2026-10-15: "tiny little buttons, easy to click the wrong thing").
    Applies to touch screens only; desktop managers keep the compact layout. Kept at the end so it wins over the base rules. */
@@ -2095,6 +2105,9 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
   #sheetBody .kv{font-size:15px;row-gap:8px}
 }
 #saveKnock:disabled{position:static;box-shadow:none}
+body{touch-action:pan-x pan-y}   /* only the map pinches (Leaflet handles its own touches); pinching the bars or the card no longer zooms the whole app */
+@media (max-height:500px){ .map-fabs{bottom:12px;flex-direction:row} .next-card{bottom:12px} }   /* phone turned sideways */
+.backdrop.show.block{pointer-events:auto}   /* on lists, a tap outside the card closes it instead of opening another house */
 html.phone-zoom .role-badge{display:none}
 html.phone-zoom .brand{font-size:20px}
 html.phone-zoom .topbar{gap:6px}
