@@ -689,19 +689,33 @@ const DB = (() => {
   let refreshing = false, lastSentAt = 0;
   const KKEY = 'doorboss.knocks.v1';   // recent knocks kept on the phone under their own key (a quota error can't take the houses with it)
 
-  function loadLocal(){ try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){ queue=[]; } try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (c) cache = Object.assign(cache, c); } catch(e){} try { const kk = JSON.parse(localStorage.getItem(KKEY) || 'null'); if (kk && Array.isArray(kk.knocks)) cache.knocks = kk.knocks; } catch(e){} }
+  // v17: the house list (and the stamp it is current to) lives in IndexedDB as ONE record, so a stamp can never run ahead of its houses
+  const IDB = (() => {
+    let dbp = null;
+    const open = () => dbp || (dbp = new Promise((res, rej) => { try { const r = indexedDB.open('doorboss', 1); r.onupgradeneeded = () => { r.result.createObjectStore('kv'); }; r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error || new Error('idb open')); r.onblocked = () => rej(new Error('idb blocked')); } catch(e){ rej(e); } }));
+    const get = async k => { const db = await open(); return new Promise((res, rej) => { const q = db.transaction('kv','readonly').objectStore('kv').get(k); q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error); }); };
+    const set = async (k, v) => { const db = await open(); return new Promise((res, rej) => { const tx = db.transaction('kv','readwrite'); tx.objectStore('kv').put(v, k); tx.oncomplete = () => res(true); tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error || new Error('idb abort')); }); };
+    return { get, set };
+  })();
+  let idbOK = false, propsT = null;
+  const cacheSnapshot = withProps => { const o = { terrs:cache.terrs, users:cache.users, me:cache.me, goals:cache.goals, settings:cache.settings, appts:cache.appts||[] }; if (withProps){ o.props = cache.props; o.propsSince = cache.propsSince; } return o; };
+  function savePropsNow(){ clearTimeout(propsT); propsT = null; if (!idbOK) return; IDB.set('props', { props:cache.props, propsSince:cache.propsSince, at:Date.now() }).catch(() => { idbOK = false; try { localStorage.setItem(CKEY, JSON.stringify(cacheSnapshot(true))); } catch(e){} }); }
+  function savePropsSoon(){ if (!idbOK || propsT) return; propsT = setTimeout(savePropsNow, 20000); }   // knocks are already safe in the queue; houses can wait
+  try { addEventListener('pagehide', savePropsNow); document.addEventListener('visibilitychange', () => { if (document.hidden) savePropsNow(); }); } catch(e){}
+  async function loadLocal(){ try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){ queue=[]; } try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (c) cache = Object.assign(cache, c); } catch(e){} try { const kk = JSON.parse(localStorage.getItem(KKEY) || 'null'); if (kk && Array.isArray(kk.knocks)) cache.knocks = kk.knocks; } catch(e){}
+    try { const rec = await IDB.get('props'); idbOK = true; if (rec && Array.isArray(rec.props)){ cache.props = rec.props; cache.propsSince = rec.propsSince || null; } } catch(e){ idbOK = false; } }
   function saveQueue(){ try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch(e){} }
-  function saveCache(){ try { localStorage.setItem(CKEY, JSON.stringify({ props:cache.props, terrs:cache.terrs, users:cache.users, me:cache.me, goals:cache.goals, settings:cache.settings, propsSince:cache.propsSince, appts:cache.appts||[] })); } catch(e){} try { localStorage.setItem(KKEY, JSON.stringify({ knocks: (cache.knocks||[]).slice(-1500) })); } catch(e){} }
+  function saveCache(){ try { localStorage.setItem(CKEY, JSON.stringify(cacheSnapshot(!idbOK))); } catch(e){} try { localStorage.setItem(KKEY, JSON.stringify({ knocks: (cache.knocks||[]).slice(-1500) })); } catch(e){} savePropsSoon(); }
   // queued (unsynced) knocks must keep showing after any reload of houses or knocks (I2)
   function reapplyQueued(){ const have = new Set(cache.knocks.map(k => k.client_id)); for (const q of queue){ if (q.type==='knock' && !have.has(q.body.client_id)) applyKnockLocally(normKnock(q.body)); } }
   const maxStamp = (rows, f) => rows.reduce((m, x) => (x && x[f] && (!m || x[f] > m)) ? x[f] : m, null);
   function mergeBy(list, fresh, keyOf){ const idx = new Map(list.map((x,i) => [keyOf(x), i])); for (const x of fresh){ const k = keyOf(x); if (idx.has(k)) list[idx.get(k)] = x; else { idx.set(k, list.length); list.push(x); } } }
 
-  async function api(method, path, body){
+  async function api(method, path, body, ms){
     const headers = body ? { 'Content-Type':'application/json' } : {};
     let token = null; try { token = localStorage.getItem('doorboss.token'); } catch(e){}
     if (token) headers['Authorization'] = 'Bearer ' + token;          // set when the app runs on a different origin than the API (iframe / separate host)
-    const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin', signal: (typeof AbortSignal!=='undefined' && AbortSignal.timeout) ? AbortSignal.timeout(20000) : undefined });
+    const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin', signal: (typeof AbortSignal!=='undefined' && AbortSignal.timeout) ? AbortSignal.timeout(ms || 20000) : undefined });
     if (!r.ok){ let msg = r.statusText; try { msg = (await r.json()).error || msg; } catch(e){} throw new Error(`${method} ${path}: ${r.status} ${msg}`); }
     return r.status===204 ? null : r.json();
   }
@@ -721,20 +735,20 @@ const DB = (() => {
 
   return {
     async init(){
-      loadLocal();
+      await loadLocal();
       try {
         [cache.me, cache.users, cache.settings, cache.goals] = await Promise.all([api('GET','/me'), api('GET','/users'), api('GET','/settings'), api('GET','/goals')]);
-        const props = await api('GET', '/properties' + (cache.propsSince ? '?since='+encodeURIComponent(cache.propsSince) : ''));
-        if (cache.propsSince){ for (const p of props.map(normProp)){ const i=cache.props.findIndex(x=>x.id===p.id); if (i>=0) cache.props[i]=p; else cache.props.push(p); } }
+        const props = await api('GET', '/properties' + (cache.propsSince ? '?since='+encodeURIComponent(cache.propsSince) : ''), null, cache.propsSince ? 45000 : 120000);   // first download of a big list can take a while
+        if (cache.propsSince) mergeBy(cache.props, props.map(normProp), x => x.id);
         else cache.props = props.map(normProp);
         cache.propsSince = maxStamp(props, 'updated_at') || cache.propsSince || null;   // server clock, not the phone's
         cache.terrs = (await api('GET','/territories')).map(normTerr);
         const from = new Date(Date.now() - 35*86400000).toISOString();
         cache.knocks = (await api('GET', `/knocks?from=${encodeURIComponent(from)}`)).map(normKnock);
-        saveCache();
+        saveCache(); savePropsNow();
       } catch(e){
-        // offline on boot: run from cache. The app shows "Offline" and keeps working. A rejected key is not "offline".
-        if (!cache.me || /: 40[13] /.test(String(e && e.message))) throw e;
+        // offline on boot: run from cache. The app shows "Offline" and keeps working. A rejected key is not "offline". No houses at all = nothing to run from: show the retry screen.
+        if (!cache.me || !cache.props.length || /: 40[13] /.test(String(e && e.message))) throw e;
       }
       // knocks still waiting to sync must keep showing on the map and in history after a restart (v13)
       reapplyQueued();
@@ -876,7 +890,7 @@ function normalizeData(){
   for (const p of A.props){
     const st = normStatus(p.status); if (st !== p.status){ p.status = st; fixed++; }
     const tier = normTier(p.tier); if (tier !== p.tier){ p.tier = tier; fixed++; }
-    if (p.installer_status && p.installer_status !== 'bankrupt'){ if (/bankrupt|closed|orphan|out of business|defunct/i.test(p.installer_status)) p.installer_status = 'bankrupt'; }
+    if (p.installer_status && p.installer_status !== 'bankrupt'){ if (/bankrupt|orphan|out of business|defunct/i.test(p.installer_status)) p.installer_status = 'bankrupt'; }
     if (typeof p.lat === 'string') p.lat = parseFloat(p.lat); if (typeof p.lng === 'string') p.lng = parseFloat(p.lng);
     for (const k of ['last_knock_at','callback_at','appointment_at','created_at']) if (typeof p[k] === 'string') p[k] = new Date(p[k]).getTime();
   }
@@ -1053,7 +1067,7 @@ function initMap(){
   $('#fabAdd').onclick = () => { if (!A.myPos) return toast('No position yet'); openAddHouse(A.myPos); };
   $('#fabRoute').onclick = () => { if (A.route) { confirmBox('End route?', `${A.route.plan.length-A.route.i} doors left on it.`, endRoute, 'End route'); } else startRoute(); };
   map.on('zoomend', () => { renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
-  map.on('moveend', () => { if (map.getZoom() >= 18) renderPins(); });
+  map.on('moveend', () => { if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); });
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
@@ -1079,12 +1093,14 @@ function filterChips(){
   const c=$('#filterChips');
   c.innerHTML = defs.map(d => `<button class="chip${A.filter===d.id?' on':''}" data-f="${d.id}">${d.label}</button>`).join('') +
     `<button class="chip${A.mine?' on':''}" data-mine="1">My territory</button>` +
+    `<button class="chip${A.orphanOnly?' on':''}" data-orph="1">Orphaned installer</button>` +
     (isMgr() ? `<button class="chip${A.showReps?' on':''}" data-reps="1">Reps</button>` : '') +
     `<button class="chip${A.basemap==='satellite'?' on':''}" data-sat="1" ${A.schematic?'style="opacity:.5"':''}>Satellite</button>`;
-  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
+  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
 }
 function visibleProps(){
   return A.props.filter(p => {
+    if (A.orphanOnly && !p.installer_status) return false;
     if (A.mine && !isMgr() && !inMyTerr(p)) return false;
     if (A.mine && isMgr() && myTerrs().length && !inMyTerr(p)) return false;
     switch (A.filter){
@@ -1097,18 +1113,24 @@ function visibleProps(){
   });
 }
 function pinStyle(p){
-  const css=getComputedStyle(document.documentElement); const s=S[p.status]||S.unknocked; const col=css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888';
+  // v17: the page-wide lookups (computed style, zoom, theme, touch) happen once per 50 ms, not once per pin
+  const nowT = performance.now(); let pc = A._pc;
+  if (!pc || nowT - pc.t > 50){ const z = A.map ? A.map.getZoom() : 16; pc = A._pc = { t:nowT, css:getComputedStyle(document.documentElement), col:{},
+    base:(z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4) * (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 1.4 : 1),   // fingers, not mouse pointers: bigger pins on phones
+    dark:document.documentElement.getAttribute('data-theme')==='dark' || (document.documentElement.getAttribute('data-theme')!=='light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) }; }
+  const s=S[p.status]||S.unknocked; const col = pc.col[p.status] || (pc.col[p.status] = pc.css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888');
   const big = p.status==='appointment'||p.status==='signed'||p.status==='callback';
-  const z = A.map ? A.map.getZoom() : 16; const base = (z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4) * (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 1.4 : 1);   // fingers, not mouse pointers: bigger pins on phones
-  const dark = document.documentElement.getAttribute('data-theme')==='dark' || (document.documentElement.getAttribute('data-theme')!=='light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const base = pc.base, dark = pc.dark;
   return { radius: big?base+2:base, fillColor:col, color: (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
 }
 const CLUSTER_ZOOM = 15;
+const clusterZoom = () => A.props.length > 8000 ? 16 : CLUSTER_ZOOM;   // v17: a big list stays clustered one zoom level longer
 function renderClusters(list){
   if (!A.clusterLayer) A.clusterLayer = L.layerGroup().addTo(A.map);
   A.clusterLayer.clearLayers();
   const z=A.map.getZoom(); const cell = z<=12 ? 0.02 : z<=13 ? 0.01 : 0.005;
   const cells = {};
+  if (A.props.length > 3000 && z >= 13){ const b = A.map.getBounds().pad(0.5); list = list.filter(p => b.contains([p.lat,p.lng])); }   // v17: only the clusters near the screen are drawn
   for (const p of list){ const key=Math.floor(p.lat/cell)+'|'+Math.floor(p.lng/(cell*1.3)); const c = cells[key] ||= { n:0, lat:0, lng:0, k:0 }; c.n++; c.lat+=p.lat; c.lng+=p.lng; if (isKnockable(p)) c.k++; }
   for (const key in cells){ const c=cells[key]; const lat=c.lat/c.n, lng=c.lng/c.n; const r = c.n>200?26: c.n>60?22: c.n>15?18:14;
     const icon = L.divIcon({ className:'', html:`<div class="cluster" style="width:${r*2}px;height:${r*2}px"><b>${c.n}</b><i>${c.k} to knock</i></div>`, iconSize:[r*2,r*2], iconAnchor:[r,r] });
@@ -1116,12 +1138,13 @@ function renderClusters(list){
 }
 function renderPins(){
   const list = visibleProps(); const z = A.map.getZoom();
-  if (A.map.getZoom() < CLUSTER_ZOOM && list.length > 60){ for (const [id,m] of A.markers){ if (A.map.hasLayer(m)) A.map.removeLayer(m); } renderClusters(list); return; }
+  if (A.map.getZoom() < clusterZoom() && list.length > 60){ for (const [id,m] of A.markers){ if (A.map.hasLayer(m)) A.map.removeLayer(m); } renderClusters(list); return; }
   if (A.clusterLayer) A.clusterLayer.clearLayers();
   const vis = new Set(list.map(p=>p.id));
+  const bigList = A.props.length > 3000, view = bigList ? A.map.getBounds().pad(0.6) : null;   // v17: with a big list only the pins near the screen exist
   for (const p of A.props){
     let m = A.markers.get(p.id);
-    if (!vis.has(p.id)){ if (m){ A.map.removeLayer(m); } continue; }
+    if (!vis.has(p.id) || (view && !view.contains([p.lat,p.lng]))){ if (m){ A.map.removeLayer(m); if (view) A.markers.delete(p.id); } continue; }
     const st = pinStyle(p);
     if (!m){ m = L.circleMarker([p.lat,p.lng], st); m.on('click', () => { A.pinClickAt = Date.now(); openSheet(p.id); }); A.markers.set(p.id, m); }
     else { m.setStyle(st); m.setRadius(st.radius); m.setLatLng([p.lat,p.lng]); }
@@ -1186,7 +1209,7 @@ function updateNext(){
   const cand = A.props.filter(p => (!A.mine ? true : inMyTerr(p)) && p.status!=='do_not_knock');
   const due = cand.filter(p => p.status==='callback' && p.callback_at && p.callback_at <= now()+30*60000);
   let pickP=null, why='';
-  const nearest = arr => arr.map(p => ({p, d:haversine(A.myPos,[p.lat,p.lng])})).sort((a,b)=>a.d-b.d)[0];
+  const nearest = arr => { let best=null, bd=Infinity; for (const p of arr){ const d=haversine(A.myPos,[p.lat,p.lng]); if (d<bd){ bd=d; best=p; } } return best ? {p:best, d:bd} : undefined; };
   if (due.length){ const n=nearest(due); pickP=n.p; why='Follow-up due · '+fmtDist(n.d); }
   else { const kn = cand.filter(p => isKnockable(p) && !(p.status==='callback' && p.callback_at && p.callback_at > now()+30*60000) && !(p.status!=='unknocked' && p.last_knock_at && now()-p.last_knock_at < 4*3600000)); const n=nearest(kn); if (n){ pickP=n.p; why=(S[n.p.status].label)+' · '+fmtDist(n.d); } }
   if (!pickP){ card.hidden=true; A.nextId=null; drawNextRing(null); return; }
@@ -1200,7 +1223,7 @@ function updateNext(){
 function showOnMap(id){
   const p=byId(A.props,id); if (!p) return;
   closeSheet(); showView('map');
-  if (!visibleProps().some(x=>x.id===p.id)){ A.filter='all'; A.mine=false; filterChips(); }
+  if (!visibleProps().some(x=>x.id===p.id)){ A.filter='all'; A.mine=false; A.orphanOnly=false; filterChips(); }
   setTimeout(()=>{ A.map.invalidateSize(); A.userMoved=true; A.map.setView([p.lat,p.lng], 18, { animate:false }); renderPins(); flashPin(p); }, 60);
 }
 function flashPin(p){
@@ -1365,7 +1388,7 @@ function renderSheet(){
         <div class="row" style="gap:6px;flex:none">${statusChip(p.status)}<button class="back" id="sheetClose" aria-label="Close" style="padding:0 10px">Close</button></div>
       </div>
       <div class="row" style="flex-wrap:wrap;gap:6px">
-        ${p.installer_status==='bankrupt'?`<span class="tag bad">Bankrupt</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
+        ${p.installer_status?`<span class="tag bad">${esc(String(p.installer_status).replace(/^./, c => c.toUpperCase()))}</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
       </div>
       <div class="kv">
         <b>Owner</b><span>${esc(p.owner_name||'—')}</span>
@@ -1902,7 +1925,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     ${CONFIG.demo?`<div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>`:''}
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v16 (re-check fixes, OK-to-text, change-only refresh).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v17 (35,000-house list: offline store, on-screen pins, orphaned-installer filter).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -2145,7 +2168,11 @@ function showAuthWall(err){
   $('#authRetry').onclick = () => location.reload();
 }
 async function start(snap){
-  try { await DB.init(); } catch(e){ console.error('DoorBoss boot failed:', e); showAuthWall(e); return; }
+  const bootNote = document.createElement('div'); bootNote.id = 'bootNote';
+  bootNote.style.cssText = 'position:fixed;inset:0;z-index:9000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#12202e;color:#fff;font:600 17px system-ui,sans-serif;text-align:center;padding:24px';
+  bootNote.innerHTML = '<div style="font-size:26px;font-weight:800">DoorBoss</div><div style="opacity:.8">Loading your houses…</div>'; document.body.appendChild(bootNote);
+  try { await DB.init(); } catch(e){ bootNote.remove(); console.error('DoorBoss boot failed:', e); showAuthWall(e); return; }
+  bootNote.remove();
   await reload();
   initMap(); applyRole(); gpsConsentThenStart();
   await updateSyncPill();
