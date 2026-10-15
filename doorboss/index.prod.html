@@ -1808,7 +1808,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v9 (phone-sized controls: bigger bar, buttons and pins).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v10 (phone-sized controls, roomy house card).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -2095,7 +2095,12 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
   .draw-bar button{height:42px;padding:0 14px;font-size:14.5px}
   .sub-tabs button{height:42px;font-size:14.5px;padding:0 15px}
   .pill{height:32px;font-size:13px}
+  #sheetBody > .stack > .row.between:first-child{flex-wrap:wrap;row-gap:8px}
+  #sheetBody > .stack > .row.between:first-child > div:first-child{flex:1 1 200px}   /* address gets the full width; status tag + Close wrap beside or under it */
+  #sheetBody h2{font-size:21px;line-height:1.2}
+  #sheetBody .kv{font-size:15px;row-gap:8px}
 }
+#saveKnock:disabled{position:static;box-shadow:none}   /* only float Save once an outcome is picked; a greyed-out floating button would cover the outcome buttons */
 </style>
 </body>
 </html>
