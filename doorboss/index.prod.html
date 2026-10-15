@@ -11,7 +11,7 @@
 /* Phones: never run inside the portal's frame. Inside a frame the phone treats us as a website (page pinch-zoom, the
    frame's 100vh hides the bottom bar behind the browser toolbar). Take the whole screen instead: this same URL,
    top-level - our own viewport/manifest then apply and "Add to Home Screen" installs a real full-screen app. */
-try { (function(){ var mm=window.matchMedia, coarse=!!(mm&&mm('(pointer: coarse)').matches), sw=Math.min(screen.width||9999,screen.height||9999), phone=coarse&&sw<700, framed=window.top!==window.self; /* v11: phone = touch screen narrower than 700 (works even when the phone claims to be a desktop, e.g. Chrome "Desktop site") */ if (framed && (phone || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent))) { window.top.location.replace(location.href); return; } /* a phone laying us out ~980px wide (desktop mode ignores the viewport tag) shrinks every control ~2.4x: scale back to the phone's real width */ function fit(){ var dev=(innerWidth>innerHeight)?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height), z=innerWidth/dev; var on=(!framed&&phone&&z>1.3); document.documentElement.style.zoom=on?z.toFixed(3):''; document.documentElement.classList.toggle('phone-zoom',on); try { if (typeof A!=='undefined'&&A.map) setTimeout(function(){ A.map.invalidateSize(); },60); } catch(e){} return z; } var z0=fit(); addEventListener('resize',fit); })(); } catch (e) {}
+try { (function(){ var mm=window.matchMedia, coarse=!!(mm&&mm('(pointer: coarse)').matches), sw=Math.min(screen.width||9999,screen.height||9999), phone=coarse&&sw<700, framed=window.top!==window.self; /* v11: phone = touch screen narrower than 700 (works even when the phone claims to be a desktop, e.g. Chrome "Desktop site") */ if (framed && (phone || /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent))) { try { var tk=new URLSearchParams(location.search).get('token'); if (tk) localStorage.setItem('doorboss.token', tk); } catch(e){} window.top.location.replace(location.pathname); return; } /* a phone laying us out ~980px wide (desktop mode ignores the viewport tag) shrinks every control ~2.4x: scale back to the phone's real width */ function fit(){ var dev=(innerWidth>innerHeight)?Math.max(screen.width,screen.height):Math.min(screen.width,screen.height), z=innerWidth/dev; var on=(!framed&&phone&&z>1.3); document.documentElement.style.zoom=on?z.toFixed(3):''; document.documentElement.classList.toggle('phone-zoom',on); try { if (typeof A!=='undefined'&&A.map) setTimeout(function(){ A.map.invalidateSize(); },60); } catch(e){} return z; } var z0=fit(); addEventListener('resize',fit); })(); } catch (e) {}
 </script>
 <link rel="apple-touch-icon" href="icon.png">
 <title>DoorBoss</title>
@@ -425,6 +425,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 /* ============================================================
    CONFIG
    ============================================================ */
+try { if (window.top===window && /[?&]token=/.test(location.search)) history.replaceState(null, '', location.pathname + location.hash); } catch(e){}   // the key never stays in the address bar or history (v16)
 const CONFIG = {
   appName: 'DoorBoss',
   intakeStart: true,                         // shows 'Start intake' once the portal has /intake/new (AI Studio prompt 10/15)
@@ -685,16 +686,22 @@ const DB = (() => {
   let cache = { props:[], terrs:[], users:[], knocks:[], positions:[], me:null, goals:null, settings:null, propsSince:null };
   let queue = [];
   let flushing = null;
+  let refreshing = false, lastSentAt = 0;
+  const KKEY = 'doorboss.knocks.v1';   // recent knocks kept on the phone under their own key (a quota error can't take the houses with it)
 
-  function loadLocal(){ try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){ queue=[]; } try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (c) cache = Object.assign(cache, c); } catch(e){} }
+  function loadLocal(){ try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){ queue=[]; } try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (c) cache = Object.assign(cache, c); } catch(e){} try { const kk = JSON.parse(localStorage.getItem(KKEY) || 'null'); if (kk && Array.isArray(kk.knocks)) cache.knocks = kk.knocks; } catch(e){} }
   function saveQueue(){ try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch(e){} }
-  function saveCache(){ try { localStorage.setItem(CKEY, JSON.stringify({ props:cache.props, terrs:cache.terrs, users:cache.users, me:cache.me, goals:cache.goals, settings:cache.settings, propsSince:cache.propsSince })); } catch(e){} }
+  function saveCache(){ try { localStorage.setItem(CKEY, JSON.stringify({ props:cache.props, terrs:cache.terrs, users:cache.users, me:cache.me, goals:cache.goals, settings:cache.settings, propsSince:cache.propsSince, appts:cache.appts||[] })); } catch(e){} try { localStorage.setItem(KKEY, JSON.stringify({ knocks: (cache.knocks||[]).slice(-1500) })); } catch(e){} }
+  // queued (unsynced) knocks must keep showing after any reload of houses or knocks (I2)
+  function reapplyQueued(){ const have = new Set(cache.knocks.map(k => k.client_id)); for (const q of queue){ if (q.type==='knock' && !have.has(q.body.client_id)) applyKnockLocally(normKnock(q.body)); } }
+  const maxStamp = (rows, f) => rows.reduce((m, x) => (x && x[f] && (!m || x[f] > m)) ? x[f] : m, null);
+  function mergeBy(list, fresh, keyOf){ const idx = new Map(list.map((x,i) => [keyOf(x), i])); for (const x of fresh){ const k = keyOf(x); if (idx.has(k)) list[idx.get(k)] = x; else { idx.set(k, list.length); list.push(x); } } }
 
   async function api(method, path, body){
     const headers = body ? { 'Content-Type':'application/json' } : {};
     let token = null; try { token = localStorage.getItem('doorboss.token'); } catch(e){}
     if (token) headers['Authorization'] = 'Bearer ' + token;          // set when the app runs on a different origin than the API (iframe / separate host)
-    const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin' });
+    const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin', signal: (typeof AbortSignal!=='undefined' && AbortSignal.timeout) ? AbortSignal.timeout(20000) : undefined });
     if (!r.ok){ let msg = r.statusText; try { msg = (await r.json()).error || msg; } catch(e){} throw new Error(`${method} ${path}: ${r.status} ${msg}`); }
     return r.status===204 ? null : r.json();
   }
@@ -720,7 +727,7 @@ const DB = (() => {
         const props = await api('GET', '/properties' + (cache.propsSince ? '?since='+encodeURIComponent(cache.propsSince) : ''));
         if (cache.propsSince){ for (const p of props.map(normProp)){ const i=cache.props.findIndex(x=>x.id===p.id); if (i>=0) cache.props[i]=p; else cache.props.push(p); } }
         else cache.props = props.map(normProp);
-        cache.propsSince = new Date().toISOString();
+        cache.propsSince = maxStamp(props, 'updated_at') || cache.propsSince || null;   // server clock, not the phone's
         cache.terrs = (await api('GET','/territories')).map(normTerr);
         const from = new Date(Date.now() - 35*86400000).toISOString();
         cache.knocks = (await api('GET', `/knocks?from=${encodeURIComponent(from)}`)).map(normKnock);
@@ -730,17 +737,22 @@ const DB = (() => {
         if (!cache.me || /: 40[13] /.test(String(e && e.message))) throw e;
       }
       // knocks still waiting to sync must keep showing on the map and in history after a restart (v13)
-      const have = new Set(cache.knocks.map(k => k.client_id));
-      for (const q of queue){ if (q.type==='knock' && !have.has(q.body.client_id)) applyKnockLocally(normKnock(q.body)); }
+      reapplyQueued();
     },
     async refresh(){
-      // light re-pull so managers and teammates see new knocks without reopening the app (v13)
-      const from = new Date(Date.now() - 35*86400000).toISOString();
-      const [props, knocks] = await Promise.all([api('GET','/properties'), api('GET', `/knocks?from=${encodeURIComponent(from)}`)]);
-      cache.props = props.map(normProp); cache.knocks = knocks.map(normKnock); cache.propsSince = new Date().toISOString();
-      const have = new Set(cache.knocks.map(k => k.client_id));
-      for (const q of queue){ if (q.type==='knock' && !have.has(q.body.client_id)) applyKnockLocally(normKnock(q.body)); }
-      saveCache();
+      // v16: only what changed (houses by server updated_at, knocks from the last 6 h), merged in; one at a time;
+      // skipped if one of our own knocks landed while it was downloading (the next run picks the server copy up)
+      if (refreshing) return; refreshing = true;
+      try {
+        const t0 = Date.now(); const pSince = cache.propsSince;
+        const from = new Date(t0 - 6*3600000).toISOString();
+        const [props, knocks] = await Promise.all([api('GET','/properties' + (pSince ? '?since='+encodeURIComponent(pSince) : '')), api('GET', `/knocks?from=${encodeURIComponent(from)}`)]);
+        if (lastSentAt >= t0) return;
+        if (pSince) mergeBy(cache.props, props.map(normProp), x => x.id); else cache.props = props.map(normProp);
+        mergeBy(cache.knocks, knocks.map(normKnock), x => x.client_id || x.id);
+        cache.propsSince = maxStamp(props, 'updated_at') || pSince || null;
+        reapplyQueued(); saveCache();
+      } finally { refreshing = false; }
     },
     async reset(){ /* no-op in production */ },
     async currentUser(){ return cache.me; },
@@ -754,7 +766,7 @@ const DB = (() => {
       const res = await api('POST','/properties', list.map(p => Object.assign({}, p, { created_at: iso(p.created_at) })));
       const fresh = (await api('GET', '/properties?since='+encodeURIComponent(cache.propsSince))).map(normProp);
       for (const p of fresh){ const i=cache.props.findIndex(x=>x.id===p.id); if (i>=0) cache.props[i]=p; else cache.props.push(p); }
-      cache.propsSince = new Date().toISOString(); saveCache();
+      cache.propsSince = maxStamp(fresh, 'updated_at') || cache.propsSince; reapplyQueued(); saveCache();
       return { added: res.added, updated: res.updated };
     },
     async addKnock(k){
@@ -766,11 +778,17 @@ const DB = (() => {
       return k;
     },
     async listKnocks(){ return cache.knocks; },
-    async listAppointments(){ try { cache.appts = (await api('GET', `/appointments?from=${encodeURIComponent(new Date(Date.now()-35*86400000).toISOString())}`)).map(a => Object.assign({}, a, { at:ts(a.at), created_at:ts(a.created_at), updated_at:ts(a.updated_at) })); saveCache(); } catch(e){} return cache.appts || []; },
+    async listAppointments(){
+      try { cache.appts = (await api('GET', `/appointments?from=${encodeURIComponent(new Date(Date.now()-35*86400000).toISOString())}`)).map(a => Object.assign({}, a, { at:ts(a.at), created_at:ts(a.created_at), updated_at:ts(a.updated_at) })); saveCache(); } catch(e){}
+      const base = cache.appts || [];
+      // a booking still waiting to sync shows as a provisional appointment (no actions) so it never vanishes offline
+      const prov = queue.filter(q => q.type==='knock' && q.body.status==='appointment' && q.body.appointment_at).map(q => ({ id:'pending:'+q.body.client_id, property_id:q.body.property_id, user_id:q.body.user_id, at:ts(q.body.appointment_at), status:'scheduled', created_at:ts(q.body.created_at), updated_at:ts(q.body.created_at), note:q.body.note||null, pending:true }));
+      return base.concat(prov.filter(pv => !base.some(a => a.property_id===pv.property_id && (a.created_at||0) >= (pv.created_at||0) - 60000)));
+    },
     async updateAppointment(id, patch){
       const body = Object.assign({}, patch, patch.at ? { at: iso(patch.at) } : {});
       const r = await api('POST', '/appointments/'+encodeURIComponent(id), body);
-      await this.listAppointments(); cache.props = (await api('GET','/properties?since='+encodeURIComponent(new Date(Date.now()-60000).toISOString()))).map(normProp).reduce((arr,p)=>{ const i=arr.findIndex(x=>x.id===p.id); if (i>=0) arr[i]=p; else arr.push(p); return arr; }, cache.props); saveCache();
+      await this.listAppointments(); cache.props = (await api('GET','/properties?since='+encodeURIComponent(new Date(Date.now()-60000).toISOString()))).map(normProp).reduce((arr,p)=>{ const i=arr.findIndex(x=>x.id===p.id); if (i>=0) arr[i]=p; else arr.push(p); return arr; }, cache.props); reapplyQueued(); saveCache();
       return r;
     },
     async claimTerritory(id){ const t = normTerr(await api('POST', `/territories/${encodeURIComponent(id)}/claim`)); const i=cache.terrs.findIndex(x=>x.id===t.id); if (i>=0) cache.terrs[i]=t; saveCache(); return t; },
@@ -783,7 +801,7 @@ const DB = (() => {
     async saveWebhook(w){ return api('POST','/webhooks/outbound', w); },
     async deleteWebhook(id){ return api('DELETE','/webhooks/outbound/'+encodeURIComponent(id)); },
     async listTerritories(){ return cache.terrs; },
-    async saveTerritory(t){ const saved = normTerr(await api('POST','/territories', t)); const i=cache.terrs.findIndex(x=>x.id===saved.id); if (i>=0) cache.terrs[i]=saved; else cache.terrs.push(saved); cache.props = (await api('GET','/properties')).map(normProp); cache.propsSince=new Date().toISOString(); saveCache(); return saved; },
+    async saveTerritory(t){ const saved = normTerr(await api('POST','/territories', t)); const i=cache.terrs.findIndex(x=>x.id===saved.id); if (i>=0) cache.terrs[i]=saved; else cache.terrs.push(saved); cache.props = (await api('GET','/properties')).map(normProp); cache.propsSince=maxStamp(cache.props,'updated_at')||cache.propsSince; reapplyQueued(); saveCache(); return saved; },
     async deleteTerritory(id){ await api('DELETE','/territories/'+encodeURIComponent(id)); cache.terrs = cache.terrs.filter(t=>t.id!==id); cache.props.forEach(p=>{ if (p.territory_id===id) p.territory_id=null; }); saveCache(); },
     async heartbeat(pos){ try { await api('POST','/heartbeat', Object.assign({}, pos, { fix_at: iso(pos.fix_at), accuracy: pos.accuracy_m, trail: (pos.trail||[]).map(t => Object.assign({}, t, { at: iso(t.at) })) })); } catch(e){ /* drop silently; next beat will land */ } },
     async listPositionHistory(user_id, dayT){ try { const d=new Date(dayT); const day=d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); return (await api('GET', `/positions/${encodeURIComponent(user_id)}?day=${day}`)).map(x=>Object.assign({}, x, { at:ts(x.at) })); } catch(e){ return []; } },
@@ -802,7 +820,7 @@ const DB = (() => {
           const res = await api('POST','/knocks', knocks);      // idempotent on client_id
           for (const r of (res||[])){ const k = cache.knocks.find(x => x.client_id===r.client_id); if (k){ k.id=r.id; k.synced_at=ts(r.synced_at)||Date.now(); } }
           const sent = new Set(knocks.map(k => k.client_id));
-          queue = queue.filter(q => !(q.type==='knock' && sent.has(q.body.client_id))); n += knocks.length; saveQueue();
+          queue = queue.filter(q => !(q.type==='knock' && sent.has(q.body.client_id))); n += knocks.length; saveQueue(); lastSentAt = Date.now();
         }
         for (const q of queue.filter(q => q.type==='message')){ await api('POST','/messages', q.body); queue = queue.filter(x => x!==q); n++; saveQueue(); }
         saveCache();
@@ -831,7 +849,7 @@ const A = {
   repId:null, repPeriod:'month', cmpId:null, lastView:'team'
 };
 const byId = (arr, id) => arr.find(x => x.id===id);
-const userName = id => (byId(A.users,id)||{}).name || '—';
+const userName = id => (byId(A.users,id) || A.users.find(u => u.email && u.email===id) || {}).name || '—';
 const userColor = id => (byId(A.users,id)||{}).color || '#888';
 const isMgr = () => A.me && (A.me.role==='manager' || A.me.role==='admin');
 const isMine = p => !!(A.me && p && (p.last_knock_by===A.me.id || (A.me.email && p.last_knock_by===A.me.email)));   // server writes the rep's email, the app writes the id
@@ -865,7 +883,8 @@ function normalizeData(){
   for (const k of A.knocks){ const st = normStatus(k.status); if (st !== k.status){ k.status = st; fixed++; } for (const f of ['created_at','callback_at','appointment_at']) if (typeof k[f] === 'string') k[f] = new Date(k[f]).getTime(); }
   if (fixed && !A._normWarned){ A._normWarned = true; console.warn(`DoorBoss: normalized ${fixed} field(s) from the backend to the app vocabulary (status/tier). Fix the data so this stops.`); }
 }
-const apptOf = p => { if (!p) return null; const byLink = p.appointment_id && byId(A.appts, p.appointment_id); if (byLink) return byLink; return A.appts.filter(a => a.property_id===p.id && a.status!=='cancelled' && a.status!=='rescheduled').sort((x,y)=>(y.created_at||0)-(x.created_at||0))[0] || null; };
+const isOpenAp = a => !!a && (a.status==='scheduled' || a.status==='confirmed');
+const apptOf = p => { if (!p) return null; const link = p.appointment_id && byId(A.appts, p.appointment_id); if (isOpenAp(link)) return link; const rows = A.appts.filter(a => a.property_id===p.id).sort((x,y)=>(y.created_at||0)-(x.created_at||0)); return rows.find(isOpenAp) || link || rows.find(a => a.status!=='cancelled' && a.status!=='rescheduled') || null; };
 const APPT_LABEL = { scheduled:'Scheduled', confirmed:'Confirmed', held:'Held', no_show:'No-show', rescheduled:'Rescheduled', cancelled:'Cancelled' };
 const RESULT_LABEL = { signed:'Signed', lost:'Lost', follow_up:'Follow-up' };
 const apptChip = ap => { if (!ap) return ''; const needs = (ap.status==='scheduled'||ap.status==='confirmed') && ap.at < now()-30*60000; const st = needs ? 'needs_outcome' : ap.status; const lbl = needs ? 'Needs outcome' : (APPT_LABEL[ap.status] + (ap.result ? ' · '+RESULT_LABEL[ap.result] : '')); return `<span class="a-chip ${st}">${lbl}</span>`; };
@@ -880,7 +899,8 @@ function openModal({ title, body, actions=[] }){
   box.innerHTML = `<h3>${esc(title)}</h3><div class="mb"></div><div class="acts"></div>`;
   const mb=$('.mb',box); if (typeof body==='string') mb.innerHTML=body; else mb.appendChild(body);
   const acts=$('.acts',box);
-  actions.forEach(a => { const b=document.createElement('button'); b.className='btn'+(a.primary?' primary':'')+(a.danger?' danger':''); b.textContent=a.label; b.onclick=async()=>{ if (b.disabled) return; b.disabled=true; let r=true; try { r = a.onClick ? await a.onClick() : true; } catch(e){ toast('Could not save: '+(e && e.message || e)); b.disabled=false; return; } b.disabled=false; if (r!==false) closeModal(); }; acts.appendChild(b); });
+  const gen = A.modalGen = (A.modalGen||0) + 1;   // an action that opens another dialog must not close it
+  actions.forEach(a => { const b=document.createElement('button'); b.className='btn'+(a.primary?' primary':'')+(a.danger?' danger':''); b.textContent=a.label; b.onclick=async()=>{ if (b.disabled) return; b.disabled=true; let r=true; try { r = a.onClick ? await a.onClick() : true; } catch(e){ toast('Could not save: '+(e && e.message || e)); b.disabled=false; return; } b.disabled=false; if (r!==false && gen===A.modalGen) closeModal(); }; acts.appendChild(b); });
   if (!actions.length){ const b=document.createElement('button'); b.className='btn'; b.textContent='Close'; b.onclick=closeModal; acts.appendChild(b); }
   m.hidden=false;
 }
@@ -994,6 +1014,7 @@ function initMap(){
   A.map = map;
   startView(map);
   map.on('dragstart', () => { A.userMoved = true; });
+  map.getContainer().addEventListener('touchstart', () => { A.userMoved = true; }, { passive:true });   // pinch / cluster tap too
   A.tiles = L.tileLayer(CONFIG.mapboxToken ? CONFIG.mapboxStreets.replace('{token}', CONFIG.mapboxToken) : CONFIG.tiles, { maxZoom:19, crossOrigin:true });
   A.sat = L.tileLayer(CONFIG.mapboxToken ? CONFIG.mapboxSat.replace('{token}', CONFIG.mapboxToken) : CONFIG.satTiles, { maxZoom: CONFIG.mapboxToken ? 20 : 19, crossOrigin:true });
   A.basemap = CONFIG.defaultBasemap; try { const b=localStorage.getItem('doorboss.basemap'); if (b==='streets'||b==='satellite') A.basemap=b; } catch(e){}
@@ -1154,7 +1175,7 @@ async function showTrail(userId, dayT){
   if (!pts.length){ toast(`No trail for ${u.name} that day`); return; }
   const ll = pts.map(x=>[x.lat,x.lng]);
   A.trailLayer = L.featureGroup([ L.polyline(ll, { color:u.color, weight:4, opacity:.75 }), L.circleMarker(ll[0], { radius:6, color:'#fff', weight:2, fillColor:u.color, fillOpacity:1 }).bindTooltip('Start '+fmtTime(pts[0].at)), L.circleMarker(ll[ll.length-1], { radius:6, color:'#fff', weight:2, fillColor:'#1b2430', fillOpacity:1 }).bindTooltip('Last '+fmtTime(pts[pts.length-1].at)) ]).addTo(A.map);
-  showView('map'); A.map.fitBounds(A.trailLayer.getBounds().pad(0.2));
+  showView('map'); A.userMoved=true; A.map.fitBounds(A.trailLayer.getBounds().pad(0.2));
   toast(`${u.name} · ${pts.length} points · ${fmtTime(pts[0].at)}–${fmtTime(pts[pts.length-1].at)} · tap map to clear`);
   A.map.once('click', () => { if (A.trailLayer){ A.map.removeLayer(A.trailLayer); A.trailLayer=null; } });
 }
@@ -1201,7 +1222,7 @@ function drawNextRing(p){
 function showCtx(e){
   if (A.draw) return;
   const c=$('#ctx'); const pt=e.containerPoint;
-  c.innerHTML = `<button data-a="add">Add a house here</button><button data-a="pos">Set my position here (demo)</button>`;
+  c.innerHTML = `<button data-a="add">Add a house here</button>${CONFIG.demo?'<button data-a="pos">Set my position here (demo)</button>':''}`;
   c.style.left = clamp(pt.x, 8, window.innerWidth-220)+'px'; c.style.top = clamp(pt.y+52, 60, window.innerHeight-160)+'px';
   c.hidden=false;
   c.onclick = ev => { const b=ev.target.closest('button'); if (!b) return; hideCtx(); if (b.dataset.a==='add') openAddHouse([e.latlng.lat,e.latlng.lng]); if (b.dataset.a==='pos'){ setMyPos([e.latlng.lat,e.latlng.lng], false); toast('Position set'); } };
@@ -1322,10 +1343,10 @@ function endRoute(){ A.route=null; drawRoute(); updateNext(); toast('Route clear
    ============================================================ */
 function openSheet(id){
   const p=byId(A.props,id); if (!p) return;
-  A.sheetProp=p; A.pendingStatus=null; A.pendingWhen=null; A.pendingPhotos=[];
+  clearTimeout(A.bdT); A.sheetProp=p; A.pendingStatus=null; A.pendingWhen=null; A.pendingPhotos=[]; A.pendingTextOk=false;
   renderSheet(); $('#backdrop').hidden=false; $('#backdrop').classList.toggle('block', A.view!=='map'); requestAnimationFrame(()=>{ $('#backdrop').classList.add('show'); $('#sheet').classList.add('show'); });
 }
-function closeSheet(){ $('#backdrop').classList.remove('show'); $('#sheet').classList.remove('show'); setTimeout(()=>{ $('#backdrop').hidden=true; },220); A.sheetProp=null; }
+function closeSheet(){ $('#backdrop').classList.remove('show'); $('#sheet').classList.remove('show'); clearTimeout(A.bdT); A.bdT=setTimeout(()=>{ $('#backdrop').hidden=true; },220); A.sheetProp=null; }
 $('#backdrop').onclick = closeSheet; $('#backdrop').addEventListener('touchend', e => { e.preventDefault(); closeSheet(); }, { passive:false });
 document.addEventListener('keydown', e => { if (e.key==='Escape' && A.sheetProp) closeSheet(); });
 /* swipe the handle down to close (iOS taps on the dim area were unreliable) */
@@ -1367,11 +1388,11 @@ function renderSheet(){
       ${(() => { const ap = apptOf(p); if (!ap) return ''; const open = ap.status==='scheduled'||ap.status==='confirmed'; const past = ap.at <= now();
         return `<div class="appt-card"><div class="row between"><div><div class="eyebrow">Appointment</div><div class="when num">${fmtDT(ap.at)}</div></div>${apptChip(ap)}</div>
           <div class="muted" style="font-size:12px">Set by ${esc(userName(ap.user_id))} · ${ap.ghl_event_id?'on the GHL calendar':'syncing to GHL calendar'}${ap.note?' · '+esc(ap.note):''}</div>
-          ${open ? `<div class="quick" id="apActs">${ap.status==='scheduled'?'<button data-ap="confirmed">Confirmed</button>':''}${past?'<button data-ap="held">Held</button><button data-ap="no_show">No-show</button>':''}<button data-ap="rescheduled">Reschedule</button><button data-ap="cancelled">Cancel</button></div>` : ''}
+          ${ap.pending ? '<div class="muted" style="font-size:12px">Saved on this phone · syncing</div>' : ''}${open && !ap.pending ? `<div class="quick" id="apActs">${ap.status==='scheduled'?'<button data-ap="confirmed">Confirmed</button>':''}${past?'<button data-ap="held">Held</button><button data-ap="no_show">No-show</button>':''}<button data-ap="rescheduled">Reschedule</button><button data-ap="cancelled">Cancel</button></div>` : ''}
           <div id="apResult" hidden><div class="eyebrow" style="margin-bottom:6px">How did it go?</div><div class="quick"><button data-res="signed">Signed</button><button data-res="follow_up">Needs follow-up</button><button data-res="lost">Lost</button></div></div>
           <div id="apWhen" hidden><input type="datetime-local" id="apWhenInput"><button class="btn sm primary" id="apWhenSave" style="margin-top:6px">Save new time</button></div>
         </div>`; })()}
-      ${sel==='appointment'||apptOf(p)||p.status==='appointment'?'':`<button class="btn primary block" id="bookAppt">📅 Book appointment · pick a day &amp; time</button>`}
+      ${sel==='appointment'||isOpenAp(apptOf(p))||(p.status==='appointment'&&!apptOf(p))?'':`<button class="btn primary block" id="bookAppt">📅 Book appointment · pick a day &amp; time</button>`}
       ${sel==='callback'?'':`<button class="btn block" id="setFollow">🔁 Set follow-up · pick a day &amp; time</button>`}
       <div>
         <div class="eyebrow" style="margin-bottom:8px">Log this door</div>
@@ -1384,6 +1405,7 @@ function renderSheet(){
           ${sel==='callback'?`<button data-min="120">In 2 hours</button><button data-tmr="17">Tomorrow 5 pm</button><button data-days="2">In 2 days</button><button data-days="7">Next week</button>`:`<button data-tmr="10">Tomorrow 10 am</button><button data-tmr="18">Tomorrow 6 pm</button><button data-days="2">In 2 days 6 pm</button>`}
         </div>
         <input type="datetime-local" id="whenInput" value="${A.pendingWhen?toLocalInput(A.pendingWhen):''}"></div>`:''}
+      ${sel==='callback'||sel==='interested'||sel==='appointment'?`<label class="okText"><input type="checkbox" id="okText" ${A.pendingTextOk?'checked':''}> They said it's OK to text them</label>`:''}
       <label class="f">Note<textarea id="noteInput" placeholder="${sel==='signed'?'Docs uploaded? Both owners signed?':'What they said, who was home…'}"></textarea></label>
       <div class="photo-row" id="photoRow">${(A.pendingPhotos||[]).map((d,i)=>`<img src="${d}" alt="Photo ${i+1}">`).join('')}</div>
       <button class="btn primary block" id="saveKnock" ${sel?'':'disabled'}>${sel? 'Save · '+esc(S[sel].label) : 'Pick an outcome'}</button>
@@ -1391,11 +1413,16 @@ function renderSheet(){
     </div>`;
   $('#sheetClose').onclick = closeSheet;
   $$('[data-copy]',el).forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
-  $$('.sbtn',el).forEach(b=>b.onclick=()=>{ A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
+  $$('.sbtn',el).forEach(b=>b.onclick=()=>{
+    const cur=apptOf(p);
+    if (b.dataset.st==='appointment' && isOpenAp(cur) && !cur.pending){ const w=$('#apWhen'); if (w){ w.hidden=false; $('#apResult').hidden=true; $('#apWhenInput').value=toLocalInput(cur.at); w.scrollIntoView({ behavior:'smooth', block:'center' }); } toast('Already booked · pick a new time to reschedule'); return; }
+    A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
+  const ok=$('#okText'); if (ok) ok.onchange=()=>{ A.pendingTextOk=ok.checked; };
   const sf=$('#setFollow'); if (sf) sf.onclick=()=>{ A.pendingStatus='callback'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
   const sm=$('#shMap'); if (sm) sm.onclick=()=>showOnMap(p.id);
   const si=$('#shIntake'); if (si) si.onclick=()=>{   // id only in the address bar: no homeowner details in the URL
     if (/SAMPLE/i.test(p.source||'')) return toast('Practice house: intake is off for sample houses');
+    if (!A.me.ghl_user_id) return toast('Your login is not linked to a GHL user yet. Ask your manager to link it before starting an intake.');
     confirmBox('Start intake with '+(firstName(p.owner_name)||'this homeowner')+'?', 'Opens the intake with their details filled in and adds them to GHL, assigned to you. Do this when you are sitting down with them.', ()=>{ (window.top||window).location.href='/intake/new?doorbossPropertyId='+encodeURIComponent(p.id); }, 'Start intake');
   };
   const ba=$('#bookAppt'); if (ba) ba.onclick=()=>{ A.pendingStatus='appointment'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
@@ -1409,26 +1436,40 @@ function renderSheet(){
     apActs.onclick = async e => { const b=e.target.closest('button'); if (!b) return; const st=b.dataset.ap;
       if (st==='held'){ $('#apResult').hidden=false; $('#apWhen').hidden=true; return; }
       if (st==='rescheduled'){ $('#apWhen').hidden=false; $('#apResult').hidden=true; $('#apWhenInput').value=toLocalInput(ap.at); return; }
-      await DB.updateAppointment(ap.id, { status:st }); await reload(); renderPins(); updateNext(); updateFollowBadge(); updateSyncPill();
-      toast({ confirmed:'Confirmed · synced to GHL', no_show:'No-show logged · follow-up set for tomorrow 5 pm', cancelled:'Cancelled' }[st] || 'Saved'); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
-    const res=$('#apResult'); if (res) res.onclick = async e => { const b=e.target.closest('button'); if (!b) return; await DB.updateAppointment(ap.id, { status:'held', result:b.dataset.res }); await reload(); renderPins(); updateNext(); updateFollowBadge(); updateSyncPill(); toast({ signed:'Signed · opportunity won in GHL', follow_up:'Held · follow-up set in 3 days', lost:'Held · marked lost' }[b.dataset.res]); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
-    const ws=$('#apWhenSave'); if (ws) ws.onclick = async () => { const v=$('#apWhenInput').value; if (!v) return toast('Pick a time'); await DB.updateAppointment(ap.id, { status:'rescheduled', at:new Date(v).getTime() }); await reload(); renderPins(); updateFollowBadge(); updateSyncPill(); toast('Rescheduled · GHL event moved'); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
+      const patch = st==='no_show' ? { status:st, callback_at:new Date(atLocal(1,17)).toISOString() } : { status:st };
+      await apUpdate(p, ap, patch, { confirmed:'Confirmed', no_show:'No-show logged · follow-up set for tomorrow 5 pm', cancelled:'Cancelled' }[st] || 'Saved', b); };
+    const res=$('#apResult'); if (res) res.onclick = async e => { const b=e.target.closest('button'); if (!b) return; const rs=b.dataset.res;
+      const patch = rs==='follow_up' ? { status:'held', result:rs, callback_at:new Date(atLocal(3,17)).toISOString() } : { status:'held', result:rs };
+      await apUpdate(p, ap, patch, { signed:'Signed · saved', follow_up:'Held · follow-up set in 3 days at 5 pm', lost:'Held · marked lost' }[rs], b); };
+    const ws=$('#apWhenSave'); if (ws) ws.onclick = async () => { const v=$('#apWhenInput').value; if (!v) return toast('Pick a time'); await apUpdate(p, ap, { status:'rescheduled', at:new Date(v).getTime() }, 'Rescheduled', ws); };
   }
+}
+const atLocal = (days, hour) => { const d=new Date(); d.setDate(d.getDate()+days); d.setHours(hour,0,0,0); return d.getTime(); };   // DST-safe, phone's local time
+/* One appointment action at a time; on failure say so; only redraw the card if the rep is still on that house (v16) */
+async function apUpdate(p, ap, patch, okMsg, btn){
+  if (A.apBusy) return; A.apBusy=true; if (btn) btn.disabled=true;
+  try {
+    await DB.updateAppointment(ap.id, patch); await reload(); renderPins(); updateNext(); updateFollowBadge(); updateSyncPill();
+    toast(okMsg); if (A.sheetProp && A.sheetProp.id===p.id){ A.sheetProp=byId(A.props,p.id); renderSheet(); } flushQueue();
+  } catch(e){ toast(/: 40[13] /.test(String(e && e.message)) ? 'Not saved · sign in again' : 'Not saved · no signal, try again'); }
+  finally { A.apBusy=false; if (btn) btn.disabled=false; }
 }
 async function saveKnock(){
   const p=A.sheetProp; const st=A.pendingStatus; if (!p||!st||A.savingKnock) return;
   if ((st==='callback'||st==='appointment') && !A.pendingWhen){ toast('Pick a time'); return; }
   A.savingKnock=true; A.pendingStatus=null; const sb=$('#saveKnock'); if (sb) sb.disabled=true;
   try {
-  const k = { property_id:p.id, user_id:A.me.id, status:st, note:$('#noteInput').value.trim(), lat:A.myPos?A.myPos[0]:null, lng:A.myPos?A.myPos[1]:null, accuracy_m:A.gpsAcc||null, callback_at: st==='callback'?A.pendingWhen:null, appointment_at: st==='appointment'?A.pendingWhen:null, source:'door', photos:(A.pendingPhotos||[]).slice(0,3) };
+  const k = { property_id:p.id, user_id:A.me.id, status:st, note:$('#noteInput').value.trim(), lat:A.myPos?A.myPos[0]:null, lng:A.myPos?A.myPos[1]:null, accuracy_m:A.gpsAcc||null, callback_at: st==='callback'?A.pendingWhen:null, appointment_at: st==='appointment'?A.pendingWhen:null, text_ok: (st==='callback'||st==='interested'||st==='appointment') && !!A.pendingTextOk, source:'door', photos:(A.pendingPhotos||[]).slice(0,3) };
   await DB.addKnock(k); A.pendingPhotos=[];
+  // redraw from the phone's own copy right away; the network catch-up runs in the background (v16)
+  A.props = await DB.listProperties(); A.knocks = await DB.listKnocks(); normalizeData();
   if (typeof routeAdvance==='function') routeAdvance(p.id);
-  await reload(); renderPins(); updateNext(); updateSyncPill(); updateFollowBadge();
-  closeSheet();
-  const msg = { not_home:'Logged · not home', callback:'Follow-up set', interested:'Interested · synced to GHL', appointment:'Appointment set · pushed to GHL', signed:'Signed · opportunity moved in GHL', not_interested:'Logged', do_not_knock:'Marked do not knock' }[st];
-  toast(msg||'Saved');
-  flushQueue();
+  renderPins(); updateNext(); updateFollowBadge(); updateSyncPill();
+  if (A.sheetProp===p) closeSheet();
+  const msg = { not_home:'Logged · not home', callback:'Follow-up set', interested:'Interested · saved', appointment:'Appointment set', signed:'Signed · saved', not_interested:'Logged', do_not_knock:'Marked do not knock' }[st];
+  toast((msg||'Saved') + (A.online ? '' : ' · will sync when you have signal'));
   } finally { A.savingKnock=false; }
+  flushQueue(); reload().then(()=>{ renderPins(); updateNext(); updateFollowBadge(); if (A.view==='follow') renderFollow(); }).catch(()=>{});
 }
 function openTextModal(p){
   const body=document.createElement('div'); body.className='stack';
@@ -1438,8 +1479,8 @@ function openTextModal(p){
     <textarea id="txtBody" style="min-height:110px">${esc(fill(CONFIG.textTemplates[0].body))}</textarea>`;
   openModal({ title:'Text '+esc(firstName(p.owner_name)), body, actions:[{label:'Cancel'},{label:'Open in Messages',primary:true,onClick:()=>{
     if (!p.owner_phone){ toast('No phone on file'); return false; }
-    const num=String(p.owner_phone).replace(/[^\d+]/g,''); const sep=/iPhone|iPad/i.test(navigator.userAgent)?'&':'?';
-    (window.top||window).location.href='sms:'+num+sep+'body='+encodeURIComponent($('#txtBody').value);
+    const num=String(p.owner_phone).replace(/[^\d+]/g,'');
+    (window.top||window).location.href='sms:'+num+'?&body='+encodeURIComponent($('#txtBody').value);
   }}] });
   $('#tplQuick').onclick=e=>{ const b=e.target.closest('button'); if(!b) return; $$('#tplQuick button').forEach(x=>x.classList.toggle('on',x===b)); $('#txtBody').value=fill(CONFIG.textTemplates[b.dataset.i].body); };
 }
@@ -1509,6 +1550,7 @@ function metrics(knocks, props){
   const sorted = knocks.slice().sort((a,b)=>a.created_at-b.created_at);
   const FOLLOW = { callback:1, interested:1, appointment:1 };
   for (const k of sorted){
+    if ((k.source||'door')!=='door'){ if (k.status==='signed') m.signed++; continue; }   // portal no-show / signed bookkeeping is not a door
     m.knocks++; m.days.add(dayKey(k.created_at)); const h=new Date(k.created_at).getHours(); m.byHour[h]++;
     const c = S[k.status] && S[k.status].contact; if (c){ m.contacts++; m.contactByHour[h]++; }
     if (FOLLOW[prevOf[k.id]]) m.followups++;
@@ -1592,14 +1634,14 @@ function mondayOf(t){ const d=new Date(startOfDay(t)); const dow=(d.getDay()+6)%
 function insights(perRep, team, period){
   const out=[];
   const f=followItems();
-  if (f.overdue.length) out.push({ k:'bad', ic:'!', t:`${f.overdue.length} callback${f.overdue.length===1?'':'s'} overdue`, s:'Promised times that already passed. Those are the warmest doors on the map.' });
+  if (f.overdue.length) out.push({ k:'bad', ic:'!', t:`${f.overdue.length} follow-up${f.overdue.length===1?'':'s'} overdue`, s:'Promised times that already passed. Those are the warmest doors on the map.' });
   for (const r of perRep){
     if (r.m.knocks>=25 && r.m.contacts/r.m.knocks < 0.22) out.push({ k:'warn', ic:'H', t:`${r.u.name}: ${pct(r.m.contacts,r.m.knocks)} contact rate on ${r.m.knocks} doors`, s:'Team average is '+pct(team.contacts,team.knocks)+'. Check the hours being worked — nobody is home before 3.' });
     if (r.m.contacts>=12 && r.m.appts/r.m.contacts < 0.06) out.push({ k:'warn', ic:'A', t:`${r.u.name}: ${r.m.contacts} contacts, ${r.m.appts} appt${r.m.appts===1?'':'s'}`, s:'Talking to people, not booking. Ride along or run the door brief with them.' });
     if (r.m.appts>=3 && r.m.appts/r.m.contacts > 0.26) out.push({ k:'good', ic:'★', t:`${r.u.name} is booking ${pct(r.m.appts,r.m.contacts)} of contacts`, s:'Record their pitch. That is the training video.' });
   }
   const best = team.byHour.map((n,h)=>({h, n, c:team.contactByHour[h], r:n?team.contactByHour[h]/n:0})).filter(x=>x.n>=15).sort((a,b)=>b.r-a.r)[0];
-  if (best) out.push({ k:'info', ic:'⏱', t:`Best hour: ${fmtHour(best.h)} · ${pct(best.c,best.n)} answer`, s:'Stack the schedule around it. Mornings are for callbacks and texts.' });
+  if (best) out.push({ k:'info', ic:'⏱', t:`Best hour: ${fmtHour(best.h)} · ${pct(best.c,best.n)} answer`, s:'Stack the schedule around it. Mornings are for follow-ups and texts.' });
   for (const t of A.terrs){
     const ps=A.props.filter(p=>p.territory_id===t.id || pointInPoly([p.lat,p.lng], t.polygon||[])); if (!ps.length) continue;
     const covered=ps.filter(p=>p.status!=='unknocked').length; const left=ps.filter(isKnockable).length;
@@ -1654,7 +1696,7 @@ function renderBoard(perRep){
   const sorted=sums.slice().sort((a,b)=>val(b)-val(a)); const max=Math.max(1,...sorted.map(val));
   return `<div class="stack">
     <div class="sub-tabs">${Object.entries(metricDefs).map(([k,l])=>`<button data-bm="${k}" class="${A.boardMetric===k?'on':''}">${l}</button>`).join('')}</div>
-    <div class="card"><div class="list">${sorted.map((r,i)=>{ const {u,m,s}=r; return `<div class="item" data-rep="${u.id}" style="cursor:pointer"><span style="font-family:var(--font-display);font-size:22px;font-weight:700;width:28px;text-align:center" class="num">${i+1}</span><span class="avatar" style="background:${u.color}">${esc(u.name[0])}</span><div class="body"><div class="t">${esc(u.name)} <span class="muted" style="font-weight:400;font-size:12px">· ${s.days} day${s.days===1?'':'s'}</span></div><div class="bar" style="margin-top:6px"><i style="width:${Math.round(100*val(r)/max)}%;background:${u.color}"></i></div><div class="s" style="margin-top:4px">${m.knocks} doors · ${m.contacts} talks · ${m.callbacks} follow-ups · ${m.appts} appts · ${m.signed} signed · starts ${fmtClock(s.avgStart)}</div></div><span class="num" style="font-family:var(--font-display);font-size:24px;font-weight:700">${shown(r)}</span></div>`; }).join('')}</div></div>
+    <div class="card"><div class="list">${sorted.map((r,i)=>{ const {u,m,s}=r; return `<div class="item" data-rep="${u.id}" style="cursor:pointer"><span style="font-family:var(--font-display);font-size:22px;font-weight:700;width:28px;text-align:center" class="num">${i+1}</span><span class="avatar" style="background:${u.color}">${esc(u.name[0])}</span><div class="body"><div class="t">${esc(u.name)} <span class="muted" style="font-weight:400;font-size:12px">· ${s.days} day${s.days===1?'':'s'}</span></div><div class="bar" style="margin-top:6px"><i style="width:${Math.round(100*val(r)/max)}%;background:${u.color}"></i></div><div class="s" style="margin-top:4px">${m.knocks} doors · ${m.contacts} talks · ${m.callbacks} follow-ups set · ${m.appts} appts · ${m.signed} signed · starts ${fmtClock(s.avgStart)}</div></div><span class="num" style="font-family:var(--font-display);font-size:24px;font-weight:700">${shown(r)}</span></div>`; }).join('')}</div></div>
     <div class="muted" style="font-size:12px">Tap a rep for the day-by-day grid and the comparison. Everyone on the team can see this.</div>
   </div>`;
 }
@@ -1704,7 +1746,7 @@ function renderStats(perRep, team){
   const bw=360/hours.length;
   const hourSvg = `<svg class="chart" viewBox="0 0 360 150" role="img" aria-label="Knocks by hour">${hours.map((h,i)=>{ const n=team.byHour[h], c=team.contactByHour[h]; const hh=Math.round(100*n/hmax), ch=Math.round(100*c/hmax); const x=i*bw+3; return `<rect x="${x}" y="${110-hh}" width="${bw-6}" height="${hh}" rx="3" fill="var(--s-unknocked)" opacity=".45"/><rect x="${x}" y="${110-ch}" width="${bw-6}" height="${ch}" rx="3" fill="var(--accent)"/>${i%2===0?`<text x="${x+(bw-6)/2}" y="128" font-size="10" text-anchor="middle" fill="var(--muted)" font-family="var(--font-body)">${(h%12||12)}${h<12?'a':'p'}</text>`:''}`; }).join('')}<line x1="0" y1="110.5" x2="360" y2="110.5" stroke="var(--line)"/></svg>`;
   const ins = insights(perRep, team, A.period);
-  const table = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Rep</th><th class="n">Doors</th><th class="n">Talks</th><th class="n">D/C</th><th class="n">F/U</th><th class="n">Appts</th><th class="n">Signed</th><th class="n">Appt%</th></tr></thead><tbody>${perRep.slice().sort((a,b)=>b.m.appts-a.m.appts||b.m.knocks-a.m.knocks).map(({u,m})=>`<tr><td><span class="avatar" style="background:${u.color};width:22px;height:22px;font-size:11px;display:inline-grid;vertical-align:middle;margin-right:6px">${esc(u.name[0])}</span>${esc(u.name)}</td><td class="n">${m.knocks}</td><td class="n">${m.contacts}</td><td class="n">${ratio(m.knocks,m.contacts)}</td><td class="n">${m.followups}</td><td class="n">${m.appts}</td><td class="n">${m.signed}</td><td class="n">${pct(m.appts,m.contacts)}</td></tr>`).join('')}</tbody></table></div>`;
+  const table = `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>Rep</th><th class="n">Doors</th><th class="n">Talks</th><th class="n">D/C</th><th class="n">Visits</th><th class="n">Appts</th><th class="n">Signed</th><th class="n">Appt%</th></tr></thead><tbody>${perRep.slice().sort((a,b)=>b.m.appts-a.m.appts||b.m.knocks-a.m.knocks).map(({u,m})=>`<tr><td><span class="avatar" style="background:${u.color};width:22px;height:22px;font-size:11px;display:inline-grid;vertical-align:middle;margin-right:6px">${esc(u.name[0])}</span>${esc(u.name)}</td><td class="n">${m.knocks}</td><td class="n">${m.contacts}</td><td class="n">${ratio(m.knocks,m.contacts)}</td><td class="n">${m.followups}</td><td class="n">${m.appts}</td><td class="n">${m.signed}</td><td class="n">${pct(m.appts,m.contacts)}</td></tr>`).join('')}</tbody></table></div>`;
   return `<div class="stack">
     <div class="grid3">${tiles.map(([v,l,s])=>`<div class="tile"><div class="v num">${v}</div><div class="l">${l}</div><div class="d">${s}</div></div>`).join('')}</div>
     ${nd.length?`<div class="stack" style="gap:8px"><div class="eyebrow">Nudges — what to change this week</div>${nd.map(i=>`<div class="insight ${i.k}" ${i.rep?`data-rep="${i.rep}" style="cursor:pointer"`:''}><div class="ic">${esc(i.ic)}</div><div class="b"><div class="t">${esc(i.t)}</div><div class="s">${esc(i.s)}</div></div></div>`).join('')}</div>`:''}
@@ -1712,7 +1754,7 @@ function renderStats(perRep, team){
     <div class="card"><h3 style="font-size:18px;margin-bottom:10px">Funnel</h3>${funnelSvg}</div>
     <div class="card"><div class="row between" style="margin-bottom:8px"><h3 style="font-size:18px">Doors by hour</h3><div class="legend"><span><i style="background:var(--s-unknocked);opacity:.45"></i>Knocked</span><span><i style="background:var(--accent)"></i>Answered</span></div></div>${hourSvg}</div>
     <div class="card"><h3 style="font-size:18px;margin-bottom:8px">By rep</h3>${table}</div>
-    <div class="muted" style="font-size:12px">Contact = someone answered (any outcome except not home). Follow-up = a return visit to a door where the last knock was a callback, interested, or appointment. Appt% = appointments ÷ contacts.</div>
+    <div class="muted" style="font-size:12px">Contact = someone answered (any outcome except not home). Follow-ups set = follow-ups a rep scheduled. Visit = a return visit to a door whose last outcome was a follow-up, interested, or appointment. Appt% = appointments ÷ contacts.</div>
   </div>`;
 }
 function renderTerrs(){
@@ -1730,7 +1772,7 @@ function renderData(){
   return `<div class="stack">
     <div class="card stack"><h3 style="font-size:18px">Import a list</h3><div class="muted" style="font-size:13px">CSV with columns: address, city, state, zip, lat, lng, owner_name, owner_phone, owner_email, installer, installer_status, installer_closed, tier, permit_year, system_kw, finance_co, source. Rows without lat/lng are skipped (geocode them first).</div><input type="file" id="csvFile" accept=".csv,text/csv"><div id="csvResult" class="muted" style="font-size:13px"></div></div>
     <div class="card stack"><h3 style="font-size:18px">Export</h3><div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" data-act="exportKnocks">Knocks CSV</button><button class="btn" data-act="exportProps">Properties CSV</button></div></div>
-    <div class="card stack"><h3 style="font-size:18px">GHL sync</h3><div class="muted" style="font-size:13px">${q?q+' item'+(q===1?'':'s')+' waiting to sync.':'Everything synced.'} Interested, callback, appointment and signed outcomes upsert the contact in Solar Freedom, tag it, and move the opportunity. See ghl-sync.md.</div><button class="btn sm" data-act="flush">Sync now</button></div>
+    <div class="card stack"><h3 style="font-size:18px">GHL sync</h3><div class="muted" style="font-size:13px">${q?q+' item'+(q===1?'':'s')+' waiting to sync.':'Everything synced.'} Interested, follow-up, appointment and signed outcomes go to GHL, assigned to the rep, once GHL sync is switched on.</div><button class="btn sm" data-act="flush">Sync now</button></div>
     ${CONFIG.demo?`<div class="card stack"><h3 style="font-size:18px">Demo data</h3><div class="muted" style="font-size:13px">This preview runs on sample data for Aurora, CO. Reset restores it.</div><button class="btn sm danger" data-act="reset">Reset demo data</button></div>`:''}
   </div>`;
 }
@@ -1741,12 +1783,12 @@ function bindTeam(body){
     if (b.dataset.rep){ openRep(b.dataset.rep); return; }
     if (b.dataset.claim){ await DB.claimTerritory(b.dataset.claim, A.me.id); await reload(); renderTerritories(); renderPins(); updateNext(); renderTeam(); toast('Territory claimed'); return; }
     if (b.dataset.bm){ A.boardMetric=b.dataset.bm; renderTeam(); return; }
-    if (b.dataset.center){ const pos=A.positions.find(p=>p.user_id===b.dataset.center); if (!pos) return toast('No position for this rep'); A.showReps=true; renderReps(); showView('map'); A.map.setView([pos.lat,pos.lng],17); return; }
+    if (b.dataset.center){ const pos=A.positions.find(p=>p.user_id===b.dataset.center); if (!pos) return toast('No position for this rep'); A.showReps=true; renderReps(); showView('map'); A.userMoved=true; A.map.setView([pos.lat,pos.lng],17); return; }
     if (b.dataset.tmenu){ editTerritory(b.dataset.tmenu); return; }
     switch (b.dataset.act){
       case 'showmap': A.showReps=true; filterChips(); renderReps(); showView('map'); break;
       case 'draw': drawStart(); break;
-      case 'flush': { const n=await flushQueue(); toast(n?`Synced ${n}`:'Nothing to sync'); renderTeam(); break; }
+      case 'flush': { syncToast(await flushQueue()); renderTeam(); break; }
       case 'reset': confirmBox('Reset demo data?','Restores the Aurora sample set. Your test knocks are removed.', async()=>{ await DB.reset(); await reload(); A.markers.forEach(m=>A.map.removeLayer(m)); A.markers.clear(); renderTerritories(); renderPins(); renderReps(); updateNext(); renderTeam(); updateSyncPill(); updateFollowBadge(); toast('Demo data reset'); }, 'Reset'); break;
       case 'exportKnocks': exportCsv('knocks.csv', [['id','property_id','address','rep','status','note','callback_at','appointment_at','lat','lng','created_at','synced_at']].concat(A.knocks.map(k=>{ const p=byId(A.props,k.property_id)||{}; return [k.id,k.property_id,p.address,userName(k.user_id),k.status,k.note,k.callback_at?new Date(k.callback_at).toISOString():'',k.appointment_at?new Date(k.appointment_at).toISOString():'',k.lat,k.lng,new Date(k.created_at).toISOString(),k.synced_at?new Date(k.synced_at).toISOString():'']; }))); break;
       case 'exportProps': exportCsv('properties.csv', [['id','address','city','state','zip','lat','lng','owner_name','owner_phone','owner_email','installer','installer_status','installer_closed','tier','permit_year','system_kw','finance_co','territory','status','last_knock_at']].concat(A.props.map(p=>[p.id,p.address,p.city,p.state,p.zip,p.lat,p.lng,p.owner_name,p.owner_phone,p.owner_email,p.installer,p.installer_status,p.installer_closed||'',p.tier,p.permit_year,p.system_kw,p.finance_co,(byId(A.terrs,p.territory_id)||{}).name||'',p.status,p.last_knock_at?new Date(p.last_knock_at).toISOString():'']))); break;
@@ -1763,17 +1805,17 @@ function editTerritory(id){
 async function importCsv(file){
   if (!file) return; const text=await file.text(); const rows=csvParse(text); if (rows.length<2) return toast('Empty file');
   const head=rows[0].map(h=>h.trim().toLowerCase().replace(/\s+/g,'_')); const idx=n=>head.indexOf(n);
-  const list=[]; let skipped=0;
+  const list=[]; let skipped=0, noAddr=0;
   for (const r of rows.slice(1)){
     const g=n=>{ const i=idx(n); return i>=0?(r[i]||'').trim():''; };
     const lat=parseFloat(g('lat')||g('latitude')), lng=parseFloat(g('lng')||g('lon')||g('longitude'));
     if (!isFinite(lat)||!isFinite(lng)){ skipped++; continue; }
     const tierRaw=g('tier').toLowerCase(); const tier = tierRaw.includes('uninst')||tierRaw.includes('no_panel')||tierRaw.includes('no panel') ? 'verified_uninstalled' : tierRaw.includes('inst')||tierRaw.includes('panel') ? 'verified_installed' : tierRaw.includes('permit') ? 'permit_only' : 'none';
-    const addr = g('address')||g('street')||g('property_address')||g('street_address')||g('site_address')||g('address1')||g('address_line_1')||g('full_address'); if (!addr){ skipped++; continue; }
+    const addr = g('address')||g('street')||g('property_address')||g('street_address')||g('site_address')||g('situs_address')||g('property_street')||g('address1')||g('address_line_1')||g('full_address'); if (!addr){ noAddr++; continue; }
     list.push({ lat, lng, address:addr, city:g('city')||g('property_city'), state:g('state')||g('property_state')||'CO', zip:g('zip')||g('postal_code')||g('zip_code')||g('zipcode')||g('postal')||g('property_zip'), owner_name:g('owner_name')||g('owner')||[g('first_name'),g('last_name')].filter(Boolean).join(' '), owner_phone:g('owner_phone')||g('phone')||g('mobile'), owner_email:g('owner_email')||g('email'), installer:g('installer')||g('contractor')||g('installer_of_record'), installer_status:g('installer_status')||'bankrupt', installer_closed:g('installer_closed')||g('bankruptcy_year'), tier, permit_year:g('permit_year')||(g('permit_date')||'').slice(0,4), system_kw:g('system_kw')||g('kw'), finance_co:g('finance_co')||g('lender'), source:g('source')||file.name });
   }
   const res=await DB.upsertProperties(list); await reload(); renderPins(); renderTerritories();
-  $('#csvResult').textContent = `${res.added} added, ${res.updated} updated${skipped?', '+skipped+' skipped (no lat/lng)':''}.`; toast(`Imported ${res.added+res.updated}`);
+  $('#csvResult').textContent = `${res.added} added, ${res.updated} updated${skipped?', '+skipped+' skipped (no lat/lng)':''}${noAddr?', '+noAddr+' skipped (no address column)':''}.`; toast(`Imported ${res.added+res.updated}`);
 }
 function exportCsv(name, rows){
   const text=csvStringify(rows);
@@ -1820,7 +1862,7 @@ function renderRep(){
     <div class="grid3">${tile(s.doors,'Doors',s.doorsPerDay.toFixed(1)+' / day')}${tile(s.contacts,'Talks',Math.round(s.contactRate*100)+'% answer')}${tile(s.appts,'Appts',Math.round(s.apptRate*100)+'% of talks')}${tile(s.signed,'Signed',pct(s.signed,s.appts)+' of appts')}${tile(fmtClock(s.avgStart),'Avg start',s.hoursPerDay.toFixed(1)+' h / day')}${tile(Math.round(s.eveningShare*100)+'%','After 4 pm',Math.round(s.earlyShare*100)+'% before 10:30')}</div>
     ${why}
     <div class="card" style="padding:0;overflow:hidden"><div style="padding:14px 14px 6px"><h3 style="font-size:18px">Day by day</h3><div class="muted" style="font-size:12px">Weekly totals in bold. Green = best day. Start = first knock. Hrs = time on the doors, gaps over 45 min (lunch, driving) removed.</div></div>
-      <div class="tbl-wrap"><table class="grid-tbl"><thead><tr><th>Day</th><th>Doors</th><th>Talks</th><th>Appts</th><th>Signed</th><th>F/U</th><th>Start</th><th>Hrs</th><th>&lt;10:30</th><th>&gt;4pm</th></tr></thead><tbody>${grid||`<tr><td colspan="10" class="muted">No doors in this period.</td></tr>`}</tbody></table></div></div>
+      <div class="tbl-wrap"><table class="grid-tbl"><thead><tr><th>Day</th><th>Doors</th><th>Talks</th><th>Appts</th><th>Signed</th><th>Visits</th><th>Start</th><th>Hrs</th><th>&lt;10:30</th><th>&gt;4pm</th></tr></thead><tbody>${grid||`<tr><td colspan="10" class="muted">No doors in this period.</td></tr>`}</tbody></table></div></div>
     ${cmpBlock}
   </div>`;
   $('#repBack').onclick = () => showView(A.lastView);
@@ -1842,7 +1884,7 @@ function renderMeView(){
   w.innerHTML = `<div class="stack">
     <div class="row"><span class="avatar" style="background:${A.me.color};width:48px;height:48px;font-size:22px">${esc(A.me.name[0])}</span><div><h2>${esc(A.me.name)}</h2><div class="muted" style="font-size:13px">${A.me.role} · ${myTerrs().map(t=>t.name).join(', ')||'no territory'}${streak?' · '+streak+'-day streak':''}</div></div></div>
     <div class="grid3">${goal(m.knocks,g.daily_knocks,'Doors today')}${goal(m.contacts,g.daily_contacts,'Contacts')}${goal(m.appts,g.daily_appts,'Appointments')}</div>
-    <div class="grid3"><div class="tile"><div class="v num">${ratio(m.knocks,m.contacts)}</div><div class="l">Doors per contact</div></div><div class="tile"><div class="v num">${m.followups}</div><div class="l">Follow-ups</div></div><div class="tile"><div class="v num">${m.signed}</div><div class="l">Signed</div></div></div>
+    <div class="grid3"><div class="tile"><div class="v num">${ratio(m.knocks,m.contacts)}</div><div class="l">Doors per contact</div></div><div class="tile"><div class="v num">${m.callbacks}</div><div class="l">Follow-ups set</div></div><div class="tile"><div class="v num">${m.signed}</div><div class="l">Signed</div></div></div>
     <div class="card stack"><h3 style="font-size:18px">Sync</h3><div class="row between"><span>${A.online?'Online':'Offline — knocks are held on this phone'}</span><span class="muted num">${A.queueLen||0} queued</span></div><div class="row between"><span>GPS</span><span class="muted">${A.gpsOk?'Live':(A.myPos?'Unavailable here — using a demo position':'No fix — showing your territory')}</span></div><button class="btn sm" data-act="flush">Sync now</button></div>
     <div class="card stack"><h3 style="font-size:18px">Daily goals</h3><div class="grid3"><label class="f">Doors<input type="number" id="g_k" value="${g.daily_knocks}"></label><label class="f">Contacts<input type="number" id="g_c" value="${g.daily_contacts}"></label><label class="f">Appts<input type="number" id="g_a" value="${g.daily_appts}"></label></div><button class="btn sm" data-act="saveGoals">Save goals</button></div>
     ${A.me.role==='rep'?`<button class="btn block" data-rep="${A.me.id}">My day-by-day grid and comparison</button>`:''}
@@ -1850,7 +1892,7 @@ function renderMeView(){
       <div class="sugg" id="coachSugg"><button>Why am I getting fewer appointments?</button><button>When should I knock?</button><button>What should I do today?</button><button>How do I pitch this installer?</button></div>
       <div class="q"><input type="text" id="coachQ" placeholder="Ask anything about your doors"><button class="btn sm primary" id="coachAsk">Ask</button></div>
       <div class="a" id="coachA" hidden></div></div>
-    <div class="card stack"><h3 style="font-size:18px">Reminders</h3><div class="row between"><span>Follow-ups 15 min before · appointments 60 min before · outcome nudges</span><span class="muted" style="font-size:12px;white-space:nowrap">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'On':'Off'}</span></div><div class="muted" style="font-size:12px">Shown while the app is open. Turn on notifications to get them in the background too; the office still texts you for anything you miss.</div><button class="btn sm" data-act="enablePush">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'Notifications are on':'Turn on notifications'}</button></div>
+    <div class="card stack"><h3 style="font-size:18px">Reminders</h3><div class="row between"><span>Follow-ups 15 min before · appointments 60 min before · outcome nudges</span><span class="muted" style="font-size:12px;white-space:nowrap">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'On':'Off'}</span></div><div class="muted" style="font-size:12px">Shown while DoorBoss is open. Turn on notifications to get a pop-up while it is open.</div><button class="btn sm" data-act="enablePush">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'Notifications are on':'Turn on notifications'}</button></div>
     ${A.me.role==='admin'?`<div class="card stack"><h3 style="font-size:18px">Users</h3><div class="list" id="userList"></div><button class="btn sm" data-act="addUser">Add a rep</button></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">AI assistant</h3><div class="muted" style="font-size:13px">Use the company model, or plug in your own. Your key is stored encrypted on the server and used only for your briefs, drafts and coaching.</div>
       <div class="grid2"><label class="f">Provider<select id="aiProv"><option value="company">Company default</option><option value="openai">OpenAI (ChatGPT)</option><option value="anthropic">Anthropic (Claude)</option><option value="google">Google (Gemini)</option></select></label><label class="f">API key<input type="text" id="aiKey" placeholder="sk-…" autocomplete="off"></label></div>
@@ -1859,8 +1901,8 @@ function renderMeView(){
       <div class="list" id="keyList"></div><button class="btn sm" data-act="newKey">Create API key</button>
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
-    <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v15 (Start intake, Follow-ups set on the leaderboard).</div>
+    ${CONFIG.demo?`<div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>`:''}
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v16 (re-check fixes, OK-to-text, change-only refresh).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -1870,7 +1912,7 @@ function renderMeView(){
     switch (b.dataset.act){
       case 'enablePush': enablePush(); break;
       case 'addUser': editUser(null); break;
-      case 'flush': { const n=await flushQueue(); toast(n?`Synced ${n}`:'Nothing to sync'); renderMeView(); break; }
+      case 'flush': { syncToast(await flushQueue()); renderMeView(); break; }
       case 'saveGoals': await DB.setGoals({ daily_knocks:+$('#g_k').value||60, daily_contacts:+$('#g_c').value||20, daily_appts:+$('#g_a').value||2 }); await reload(); renderMeView(); toast('Goals saved'); break;
       case 'saveAi': { const key=$('#aiKey').value; const keep = key.startsWith('••••'); await DB.setAiSettings({ provider:$('#aiProv').value, key: keep ? (ai.key||'') : key.trim() }); await reload(); toast($('#aiProv').value==='company'?'Using the company model':'Key saved'); renderMeView(); break; }
       case 'newKey': { const label = 'Key '+((await DB.listApiKeys()).length+1); const k=await DB.createApiKey(label); await reload(); renderKeys(); openModal({ title:'API key created', body:`<div class="muted" style="font-size:13px">Copy it now; it is shown once.</div><div class="key" style="display:block;margin-top:8px;word-break:break-all">${esc(k.key)}</div>`, actions:[{label:'Copy',primary:true,onClick:()=>{ copyText(k.key); return false; }},{label:'Done'}] }); break; }
@@ -1879,7 +1921,7 @@ function renderMeView(){
       case 'delHook': await DB.deleteWebhook(b.dataset.id); await reload(); renderKeys(); toast('Removed'); break;
     }
   };
-  $('#meSel').onchange = async () => { await DB.setCurrentUser($('#meSel').value); await reload(); applyRole(); renderMeView(); };
+  const meSel=$('#meSel'); if (meSel) meSel.onchange = async () => { await DB.setCurrentUser($('#meSel').value); await reload(); applyRole(); renderMeView(); };
   $('#coachAsk').onclick = () => askCoach($('#coachQ').value);
   $('#coachQ').onkeydown = e => { if (e.key==='Enter') askCoach($('#coachQ').value); };
   $('#coachSugg').onclick = e => { const b=e.target.closest('button'); if (b){ $('#coachQ').value=b.textContent; askCoach(b.textContent); } };
@@ -1904,7 +1946,7 @@ function askCoach(q){
     a = bestHours.length ? `Best answer rates on this team this month: ${bestHours.map(x=>fmtClock(x.h)+' ('+Math.round(x.r*100)+'%)').join(', ')}. Your average start is ${fmtClock(me.avgStart)} and ${Math.round(me.eveningShare*100)}% of your doors are after 4 pm. Mornings are for callbacks and texts; be on fresh doors by 4.` : 'Not enough knocks yet to say. Work 4–8 pm and the numbers will tell you.';
   } else if (/today|do|plan|start|next/.test(q)){
     const f=followItems(); const kn=A.props.filter(p=>inMyTerr(p)&&isKnockable(p)).length;
-    a = `Today:\n1. ${f.overdue.length} overdue callback${f.overdue.length===1?'':'s'} and ${f.today.length} due today — do those first, they book at ${me.fuApptRate?Math.round(me.fuApptRate*100)+'%':'3x the rate of fresh doors'}.\n2. ${f.apptsToday.length} appointment${f.apptsToday.length===1?'':'s'} today — confirm by text now.\n3. ${kn} knockable doors in your territory. At ${me.doorsPerHour?me.doorsPerHour.toFixed(0):'10'} doors an hour, save 4–8 pm for fresh doors.\nGoal: ${A.goals.daily_knocks} doors, ${A.goals.daily_contacts} talks, ${A.goals.daily_appts} appts.`;
+    a = `Today:\n1. ${f.overdue.length} overdue follow-up${f.overdue.length===1?'':'s'} and ${f.today.length} due today — do those first, they book at ${me.fuApptRate?Math.round(me.fuApptRate*100)+'%':'3x the rate of fresh doors'}.\n2. ${f.apptsToday.length} appointment${f.apptsToday.length===1?'':'s'} today — confirm by text now.\n3. ${kn} knockable doors in your territory. At ${me.doorsPerHour?me.doorsPerHour.toFixed(0):'10'} doors an hour, save 4–8 pm for fresh doors.\nGoal: ${A.goals.daily_knocks} doors, ${A.goals.daily_contacts} talks, ${A.goals.daily_appts} appts.`;
   } else if (/pitch|say|script|installer|open/.test(q)){
     const inst={}; A.props.filter(p=>inMyTerr(p)).forEach(p=>inst[p.installer]=(inst[p.installer]||0)+1); const topInst=Object.entries(inst).sort((a,b)=>b[1]-a[1])[0];
     a = topInst ? `Most of your territory is ${topInst[0]} (${topInst[1]} homes). Open with the fact, not the offer: "${topInst[0]} shut down — do you know who services your system now?" For homes with a permit and no panels: "Are you still paying for a system that never got turned on?" Then book a 20-minute contract review. Never say "cancel your solar" at the door.` : 'Open with the installer by name and the year it shut down. Ask who services the system now. Book the review.';
@@ -1945,11 +1987,12 @@ function editUser(id){
    True background tracking needs the native wrapper (AI-STUDIO-BUILD, stage 13).
    ============================================================ */
 async function updateSyncPill(){ A.queueLen = await DB.queueLength(); const p=$('#syncPill'); p.classList.toggle('off', !A.online); p.classList.toggle('err', false); $('#syncText').textContent = !A.online ? `Offline · ${A.queueLen} held` : A.queueLen ? `${A.queueLen} to sync` : 'Synced'; }
-async function flushQueue(){ if (!A.online) return 0; let n=0; try { n=await DB.flushQueue(); } catch(e){ console.warn('sync failed, will retry', e); } if (n){ A.appts = await DB.listAppointments(); updateFollowBadge(); if (A.view==='follow') renderFollow(); } await updateSyncPill(); return n; }
+async function flushQueue(){ if (!A.online) return 0; let n=0; try { n=await DB.flushQueue(); } catch(e){ console.warn('sync failed, will retry', e); if (/: 40[13] /.test(String(e && e.message)) && !A.authWall){ A.authWall=true; showAuthWall(e); } await updateSyncPill(); const p=$('#syncPill'); if (p) p.classList.add('err'); return -1; } if (n){ A.appts = await DB.listAppointments(); updateFollowBadge(); if (A.view==='follow') renderFollow(); } await updateSyncPill(); return n; }
 async function refreshAll(){ if (!A.online || document.hidden || A.savingKnock || !DB.refresh) return; try { await DB.refresh(); await reload(); renderPins(); updateNext(); updateFollowBadge(); if (A.view==='follow') renderFollow(); if (A.view==='team') renderTeam(); } catch(e){ console.warn('refresh failed', e); } }
 window.addEventListener('online', ()=>{ A.online=true; updateSyncPill(); flushQueue().then(n=>n&&toast(`Back online · synced ${n}`)); });
 window.addEventListener('offline', ()=>{ A.online=false; updateSyncPill(); toast('Offline · knocks are saved on this phone'); });
-$('#syncPill').onclick = async()=>{ const n=await flushQueue(); toast(n?`Synced ${n}`:'Nothing to sync'); };
+function syncToast(n){ const q=A.queueLen||0; toast(n>0 ? `Synced ${n}` : n<0 ? `Could not sync · ${q} waiting, will retry` : (!A.online && q) ? `Offline · ${q} held on this phone` : q ? `${q} waiting to sync` : 'Nothing to sync'); }
+$('#syncPill').onclick = async()=>{ syncToast(await flushQueue()); };
 
 /* ---------- GPS ---------- */
 const GPS = { watchId:null, lastFix:null, acc:null, heading:null, speed:null, on:false, consent:false, trail:[], wake:null, badFixes:0 };
@@ -1971,7 +2014,7 @@ function setMyPos(ll, fromGps, meta){
    Aurora. Demo keeps the sample neighbourhood. Never fights a map the rep already moved. */
 function noFixView(){
   if (CONFIG.demo){ setMyPos(CONFIG.demoCenter,false); if (!A.userMoved) A.map.setView(CONFIG.demoCenter,16); return; }
-  if (!GPS.lastFix) setMyPos(null,false); else { A.gpsOk=false; updateTrackPill(); }   // keep the last real fix; route and next-door card need a position
+  if (!GPS.lastFix && !A.myPos) setMyPos(null,false); else { A.gpsOk=false; updateTrackPill(); }   // keep the last real fix; route and next-door card need a position
   if (!A.userMoved && A.map && !GPS.lastFix) startView(A.map);
 }
 function gpsConsentThenStart(){
@@ -1983,15 +2026,15 @@ function gpsConsentThenStart(){
 function startGps(){
   if (!('geolocation' in navigator)){ noFixView(); updateTrackPill(); return; }
   let got=false;
-  const fail = (err) => { if (!got){ noFixView(); GPS.on=false; updateTrackPill(err && err.code===1 ? 'denied' : 'unavailable'); } };
+  const fail = (err) => { if (err && err.code===1) GPS.denied=true; if (!got){ noFixView(); GPS.on=false; updateTrackPill(err && err.code===1 ? 'denied' : 'unavailable'); } };
   try {
     if (GPS.watchId!=null) navigator.geolocation.clearWatch(GPS.watchId);
     GPS.watchId = navigator.geolocation.watchPosition(pos => {
       const c=pos.coords;
       if (c.accuracy > 150){ GPS.badFixes++; if (GPS.badFixes < 3) return; }          // ignore a couple of wild fixes (cell-tower)
-      GPS.badFixes=0; got=true; GPS.on=true;
+      GPS.badFixes=0; got=true; GPS.on=true; GPS.denied=false;
       setMyPos([c.latitude,c.longitude], true, { acc:c.accuracy, heading:c.heading, speed:c.speed });
-      if (!A.centered){ A.centered=true; const near = A.props.some(p => haversine(A.myPos,[p.lat,p.lng]) < 1200); if (near) A.map.setView(A.myPos,17); else if (A.props.length) { const mineList = A.me && myTerrs().length ? A.props.filter(inMyTerr) : []; const b=L.latLngBounds((mineList.length ? mineList : A.props).map(p=>[p.lat,p.lng])); A.map.fitBounds(b.pad(0.08),{maxZoom:17,animate:false}); toast('You are '+fmtDist(Math.min(...A.props.map(p=>haversine(A.myPos,[p.lat,p.lng]))))+' from your nearest door. Showing the territory.'); } else A.map.setView(A.myPos,17); }
+      if (!A.centered){ A.centered=true; if (A.userMoved) return; const near = A.props.some(p => haversine(A.myPos,[p.lat,p.lng]) < 1200); if (near) A.map.setView(A.myPos,17); else if (A.props.length) { const mineList = A.me && myTerrs().length ? A.props.filter(inMyTerr) : []; const b=L.latLngBounds((mineList.length ? mineList : A.props).map(p=>[p.lat,p.lng])); A.map.fitBounds(b.pad(0.08),{maxZoom:17,animate:false}); toast('You are '+fmtDist(Math.min(...A.props.map(p=>haversine(A.myPos,[p.lat,p.lng]))))+' from your nearest door. Showing the territory.'); } else A.map.setView(A.myPos,17); }
     }, fail, { enableHighAccuracy:true, maximumAge:3000, timeout:15000 });
     clearTimeout(GPS.failT); const myWatch = GPS.watchId; GPS.failT = setTimeout(()=>{ if (!got && GPS.watchId===myWatch) fail(null); }, 16000);
   } catch(e){ fail(e); }
@@ -2008,7 +2051,7 @@ function updateTrackPill(reason){
   const age = GPS.lastFix ? now()-GPS.lastFix : null;
   let cls='', txt='';
   if (!GPS.consent){ cls='off'; txt='GPS off'; }
-  else if (!GPS.on || age==null){ cls='off'; txt = reason==='denied' ? 'GPS denied' : 'No fix'; }
+  else if (!GPS.on || age==null){ cls='off'; txt = (reason==='denied' || GPS.denied) ? 'GPS denied' : 'No fix'; }
   else if (age > 60000){ cls='err'; txt='Stale '+fmtRel(GPS.lastFix); }
   else { cls=''; txt = 'Tracking' + (GPS.acc ? ' ±'+Math.round(GPS.acc)+' m' : ''); }
   p.className='pill '+cls; $('#trackText').textContent=txt;
@@ -2060,8 +2103,8 @@ async function enablePush(){
     if (CONFIG.vapidPublicKey){
       const sub = await reg.pushManager.subscribe({ userVisibleOnly:true, applicationServerKey: urlB64ToUint8(CONFIG.vapidPublicKey) });
       await DB.savePushSubscription(sub.toJSON());
-      toast('Push on · you will get callbacks and no-shows even with the app closed');
-    } else toast('Reminders on while the app is open or in the background');
+      toast('Reminders on while DoorBoss is open');
+    } else toast('Reminders on while DoorBoss is open');
   } catch(e){ toast('Push could not be set up: '+e.message); }
   if (A.view==='me') renderMeView();
 }
@@ -2159,8 +2202,10 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
 }
 #saveKnock:disabled{position:static;box-shadow:none}
 .rowmap{flex:none;margin-left:8px;padding:0 10px;height:34px}
+.okText{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:600;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface-2)}
+.okText input{width:22px;height:22px;flex:none}
 body{touch-action:pan-x pan-y}   /* only the map pinches (Leaflet handles its own touches); pinching the bars or the card no longer zooms the whole app */
-@media (max-height:500px){ .map-fabs{bottom:12px;flex-direction:row} .next-card{bottom:12px} }   /* phone turned sideways */
+@media (max-height:500px){ .map-fabs{bottom:12px;flex-direction:row} .next-card{bottom:12px;right:calc(224px + env(safe-area-inset-right,0px))} }   /* phone turned sideways */
 .backdrop.show.block{pointer-events:auto}   /* on lists, a tap outside the card closes it instead of opening another house */
 html.phone-zoom .role-badge{display:none}
 html.phone-zoom .brand{font-size:20px}
