@@ -427,6 +427,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
    ============================================================ */
 const CONFIG = {
   appName: 'DoorBoss',
+  intakeStart: false,                        // shows 'Start intake' once the portal has /intake/new (AI Studio prompt 10/15)
   demoCenter: [39.6975, -104.8262],          // Aurora, CO
   // Streets: Esri World Street Map — clean, keyless, built for app traffic, same host as the satellite layer. (OSM's own tile server blocks apps at team scale.)
   tiles: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
@@ -450,7 +451,7 @@ const CONFIG = {
   onlineWindowMs: 2 * 60 * 1000,
   textTemplates: [
     { id:'intro',    label:'Intro',    body:'Hi {first}, this is {rep} with Elite Solar Recovery. We stopped by about the solar system {installer} put on your home. Since they shut down, you may have options on that contract. Good time to talk today?' },
-    { id:'callback', label:'Callback', body:'Hi {first}, {rep} from Elite Solar Recovery. Following up like we said. Does {when} still work?' },
+    { id:'callback', label:'Follow-up', body:'Hi {first}, {rep} from Elite Solar Recovery. Following up like we said. Does {when} still work?' },
     { id:'confirm',  label:'Confirm appt', body:'Hi {first}, confirming your appointment with Elite Solar Recovery on {when}. Reply YES to confirm or let me know if you need a different time.' }
   ]
 };
@@ -458,7 +459,7 @@ const CONFIG = {
 const STATUSES = [
   { id:'unknocked',      label:'Not knocked',    color:'var(--s-unknocked)',      contact:false },
   { id:'not_home',       label:'Not home',       color:'var(--s-not_home)',       contact:false },
-  { id:'callback',       label:'Callback',       color:'var(--s-callback)',       contact:true  },
+  { id:'callback',       label:'Follow-up',       color:'var(--s-callback)',       contact:true  },
   { id:'interested',     label:'Interested',     color:'var(--s-interested)',     contact:true  },
   { id:'appointment',    label:'Appt set',       color:'var(--s-appointment)',    contact:true  },
   { id:'signed',         label:'Signed',         color:'var(--s-signed)',         contact:true  },
@@ -1049,7 +1050,7 @@ function setMapNote(t, quiet){ const n=$('#mapNote'); n.textContent=t; n.hidden=
 function filterChips(){
   const defs = [
     { id:'knockable', label:'Knock next' },
-    { id:'callbacks', label:'Callbacks' },
+    { id:'callbacks', label:'Follow-ups' },
     { id:'appts', label:'Appts' },
     { id:'hot', label:'Interested' },
     { id:'all', label:'All' }
@@ -1165,7 +1166,7 @@ function updateNext(){
   const due = cand.filter(p => p.status==='callback' && p.callback_at && p.callback_at <= now()+30*60000);
   let pickP=null, why='';
   const nearest = arr => arr.map(p => ({p, d:haversine(A.myPos,[p.lat,p.lng])})).sort((a,b)=>a.d-b.d)[0];
-  if (due.length){ const n=nearest(due); pickP=n.p; why='Callback due · '+fmtDist(n.d); }
+  if (due.length){ const n=nearest(due); pickP=n.p; why='Follow-up due · '+fmtDist(n.d); }
   else { const kn = cand.filter(p => isKnockable(p) && !(p.status==='callback' && p.callback_at && p.callback_at > now()+30*60000) && !(p.status!=='unknocked' && p.last_knock_at && now()-p.last_knock_at < 4*3600000)); const n=nearest(kn); if (n){ pickP=n.p; why=(S[n.p.status].label)+' · '+fmtDist(n.d); } }
   if (!pickP){ card.hidden=true; A.nextId=null; drawNextRing(null); return; }
   A.nextId=pickP.id; card.hidden=false; drawNextRing(pickP);
@@ -1174,6 +1175,20 @@ function updateNext(){
   $('#nextS').textContent = why + ' · ' + pickP.installer + ' · ' + (TIERS[pickP.tier]||TIERS.none).short;
 }
 
+/* From Follow-ups / Team: jump to the house on the map, street level, pulsing ring, without leaving the app (v14) */
+function showOnMap(id){
+  const p=byId(A.props,id); if (!p) return;
+  closeSheet(); showView('map');
+  if (!visibleProps().some(x=>x.id===p.id)){ A.filter='all'; A.mine=false; filterChips(); }
+  setTimeout(()=>{ A.map.invalidateSize(); A.userMoved=true; A.map.setView([p.lat,p.lng], 18, { animate:false }); renderPins(); flashPin(p); }, 60);
+}
+function flashPin(p){
+  if (A.flashRing){ A.map.removeLayer(A.flashRing); A.flashRing=null; }
+  if (!A.svgRenderer) A.svgRenderer = L.svg({ padding:0.5 });
+  A.flashRing = L.circleMarker([p.lat,p.lng], { renderer:A.svgRenderer, radius:24, color:'#f05a1a', weight:4, fill:false, opacity:.95, interactive:false, className:'next-ring' }).addTo(A.map);
+  clearTimeout(A.flashT); A.flashT = setTimeout(()=>{ if (A.flashRing){ A.map.removeLayer(A.flashRing); A.flashRing=null; } }, 8000);
+  toast(p.address+' · tap the pin to log it');
+}
 function drawNextRing(p){
   if (A.nextRing){ A.map.removeLayer(A.nextRing); A.nextRing=null; }
   if (!p || !A.map) return;
@@ -1283,7 +1298,7 @@ function startRoute(){
   A.route = { plan, i:0, startedAt:now() };
   drawRoute(); showNextRouteCard();
   const total = plan.reduce((a,x)=>a+x.leg,0);
-  toast(`${plan.length} doors · ${fmtDist(total)} walking · ${plan.filter(x=>x.due).length} callbacks first`);
+  toast(`${plan.length} doors · ${fmtDist(total)} walking · ${plan.filter(x=>x.due).length} follow-ups first`);
 }
 function drawRoute(){
   if (A.routeLayer){ A.map.removeLayer(A.routeLayer); A.routeLayer=null; }
@@ -1297,7 +1312,7 @@ function showNextRouteCard(){
   A.nextId=p.id; card.hidden=false;
   $('#nextSw').style.background = S[p.status].color;
   $('#nextT').textContent = `${A.route.i+1}/${A.route.plan.length} · ${p.address}`;
-  $('#nextS').textContent = (x.due?'Callback due · ':'') + fmtDist(haversine(A.myPos,[p.lat,p.lng])) + ' · ' + p.installer + ' · ' + (TIERS[p.tier]||TIERS.none).short;
+  $('#nextS').textContent = (x.due?'Follow-up due · ':'') + fmtDist(haversine(A.myPos,[p.lat,p.lng])) + ' · ' + p.installer + ' · ' + (TIERS[p.tier]||TIERS.none).short;
 }
 function routeAdvance(propertyId){ if (!A.route) return; const i=A.route.plan.findIndex(x=>x.p.id===propertyId); if (i>=0 && i>=A.route.i){ A.route.i = i+1; } drawRoute(); showNextRouteCard(); }
 function endRoute(){ A.route=null; drawRoute(); updateNext(); toast('Route cleared'); }
@@ -1337,13 +1352,15 @@ function renderSheet(){
         <b>Email</b><span style="word-break:break-all">${esc(p.owner_email||'—')}</span>
         <b>Installer</b><span>${esc(p.installer||'—')}${p.installer_closed?` <span class="muted">· closed ${esc(p.installer_closed)}</span>`:''}</span>
         <b>Finance</b><span>${esc(p.finance_co||'—')}</span>
-        ${p.callback_at?`<b>Callback</b><span class="num">${fmtDT(p.callback_at)}</span>`:''}
+        ${p.callback_at?`<b>Follow-up</b><span class="num">${fmtDT(p.callback_at)}</span>`:''}
         ${p.appointment_at?`<b>Appt</b><span class="num">${fmtDT(p.appointment_at)}</span>`:''}
         ${p.ghl_contact_id?`<b>GHL</b><span>Contact linked</span>`:''}
       </div>
       <div class="row" style="gap:8px;flex-wrap:wrap">
-        <a class="btn sm" href="${nav}" target="_blank" rel="noopener">Navigate</a>
+        ${A.view!=='map'?`<button class="btn sm primary" id="shMap">📍 Show on map</button>`:''}
+        <a class="btn sm" href="${nav}" target="_blank" rel="noopener">Directions ↗</a>
         <button class="btn sm" id="shText">Text</button>
+        ${CONFIG.intakeStart?`<button class="btn sm" id="shIntake">📝 Start intake</button>`:''}
         <button class="btn sm" id="shBrief">AI door brief</button>
       </div>
       <div id="briefBox" hidden></div>
@@ -1355,15 +1372,16 @@ function renderSheet(){
           <div id="apWhen" hidden><input type="datetime-local" id="apWhenInput"><button class="btn sm primary" id="apWhenSave" style="margin-top:6px">Save new time</button></div>
         </div>`; })()}
       ${sel==='appointment'||apptOf(p)||p.status==='appointment'?'':`<button class="btn primary block" id="bookAppt">📅 Book appointment · pick a day &amp; time</button>`}
+      ${sel==='callback'?'':`<button class="btn block" id="setFollow">🔁 Set follow-up · pick a day &amp; time</button>`}
       <div>
         <div class="eyebrow" style="margin-bottom:8px">Log this door</div>
         <div class="status-grid">
           ${STATUSES.filter(s=>s.id!=='unknocked').map(s=>`<button class="sbtn${sel===s.id?' on':''}" data-st="${s.id}"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</button>`).join('')}
         </div>
       </div>
-      ${needsWhen?`<div class="stack" style="gap:8px"><div class="eyebrow">${sel==='callback'?'Callback when':'Appointment when'}</div>
+      ${needsWhen?`<div class="stack" style="gap:8px"><div class="eyebrow">${sel==='callback'?'Follow-up when':'Appointment when'}</div>
         <div class="quick" id="quickWhen">
-          ${sel==='callback'?`<button data-min="120">In 2 hours</button><button data-tmr="17">Tomorrow 5 pm</button><button data-days="2">In 2 days</button>`:`<button data-tmr="10">Tomorrow 10 am</button><button data-tmr="18">Tomorrow 6 pm</button><button data-days="2">In 2 days 6 pm</button>`}
+          ${sel==='callback'?`<button data-min="120">In 2 hours</button><button data-tmr="17">Tomorrow 5 pm</button><button data-days="2">In 2 days</button><button data-days="7">Next week</button>`:`<button data-tmr="10">Tomorrow 10 am</button><button data-tmr="18">Tomorrow 6 pm</button><button data-days="2">In 2 days 6 pm</button>`}
         </div>
         <input type="datetime-local" id="whenInput" value="${A.pendingWhen?toLocalInput(A.pendingWhen):''}"></div>`:''}
       <label class="f">Note<textarea id="noteInput" placeholder="${sel==='signed'?'Docs uploaded? Both owners signed?':'What they said, who was home…'}"></textarea></label>
@@ -1374,6 +1392,9 @@ function renderSheet(){
   $('#sheetClose').onclick = closeSheet;
   $$('[data-copy]',el).forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{ A.pendingStatus=b.dataset.st; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; });
+  const sf=$('#setFollow'); if (sf) sf.onclick=()=>{ A.pendingStatus='callback'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
+  const sm=$('#shMap'); if (sm) sm.onclick=()=>showOnMap(p.id);
+  const si=$('#shIntake'); if (si) si.onclick=()=>{ (window.top||window).location.href='/intake/new?doorbossPropertyId='+encodeURIComponent(p.id); };   // id only: no homeowner details in the address bar
   const ba=$('#bookAppt'); if (ba) ba.onclick=()=>{ A.pendingStatus='appointment'; const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; const qw=$('#quickWhen'); if (qw) qw.scrollIntoView({ behavior:'smooth', block:'center' }); };
   const qw=$('#quickWhen'); if (qw) qw.onclick=e=>{ const b=e.target.closest('button'); if (!b) return; let t; if (b.dataset.min) t=now()+b.dataset.min*60000; if (b.dataset.tmr || b.dataset.days){ const d=new Date(); d.setDate(d.getDate()+(b.dataset.tmr?1:+b.dataset.days)); d.setHours(b.dataset.tmr?+b.dataset.tmr:(sel==='callback'?17:18),0,0,0); t=d.getTime(); } A.pendingWhen=t; $('#whenInput').value=toLocalInput(t); $$('#quickWhen button').forEach(x=>x.classList.toggle('on',x===b)); };
   const wi=$('#whenInput'); if (wi) wi.onchange=()=>{ A.pendingWhen = wi.value ? new Date(wi.value).getTime() : null; };
@@ -1386,8 +1407,8 @@ function renderSheet(){
       if (st==='held'){ $('#apResult').hidden=false; $('#apWhen').hidden=true; return; }
       if (st==='rescheduled'){ $('#apWhen').hidden=false; $('#apResult').hidden=true; $('#apWhenInput').value=toLocalInput(ap.at); return; }
       await DB.updateAppointment(ap.id, { status:st }); await reload(); renderPins(); updateNext(); updateFollowBadge(); updateSyncPill();
-      toast({ confirmed:'Confirmed · synced to GHL', no_show:'No-show logged · callback set for tomorrow 5 pm', cancelled:'Cancelled' }[st] || 'Saved'); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
-    const res=$('#apResult'); if (res) res.onclick = async e => { const b=e.target.closest('button'); if (!b) return; await DB.updateAppointment(ap.id, { status:'held', result:b.dataset.res }); await reload(); renderPins(); updateNext(); updateFollowBadge(); updateSyncPill(); toast({ signed:'Signed · opportunity won in GHL', follow_up:'Held · callback set in 3 days', lost:'Held · marked lost' }[b.dataset.res]); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
+      toast({ confirmed:'Confirmed · synced to GHL', no_show:'No-show logged · follow-up set for tomorrow 5 pm', cancelled:'Cancelled' }[st] || 'Saved'); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
+    const res=$('#apResult'); if (res) res.onclick = async e => { const b=e.target.closest('button'); if (!b) return; await DB.updateAppointment(ap.id, { status:'held', result:b.dataset.res }); await reload(); renderPins(); updateNext(); updateFollowBadge(); updateSyncPill(); toast({ signed:'Signed · opportunity won in GHL', follow_up:'Held · follow-up set in 3 days', lost:'Held · marked lost' }[b.dataset.res]); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
     const ws=$('#apWhenSave'); if (ws) ws.onclick = async () => { const v=$('#apWhenInput').value; if (!v) return toast('Pick a time'); await DB.updateAppointment(ap.id, { status:'rescheduled', at:new Date(v).getTime() }); await reload(); renderPins(); updateFollowBadge(); updateSyncPill(); toast('Rescheduled · GHL event moved'); A.sheetProp=byId(A.props,p.id); renderSheet(); flushQueue(); };
   }
 }
@@ -1401,7 +1422,7 @@ async function saveKnock(){
   if (typeof routeAdvance==='function') routeAdvance(p.id);
   await reload(); renderPins(); updateNext(); updateSyncPill(); updateFollowBadge();
   closeSheet();
-  const msg = { not_home:'Logged · not home', callback:'Callback set', interested:'Interested · synced to GHL', appointment:'Appointment set · pushed to GHL', signed:'Signed · opportunity moved in GHL', not_interested:'Logged', do_not_knock:'Marked do not knock' }[st];
+  const msg = { not_home:'Logged · not home', callback:'Follow-up set', interested:'Interested · synced to GHL', appointment:'Appointment set · pushed to GHL', signed:'Signed · opportunity moved in GHL', not_interested:'Logged', do_not_knock:'Marked do not knock' }[st];
   toast(msg||'Saved');
   flushQueue();
   } finally { A.savingKnock=false; }
@@ -1453,24 +1474,24 @@ function followItems(){
 function updateFollowBadge(){ const f=followItems(); const n=f.overdue.length+f.today.length+f.apptsToday.length; const b=$('#followCnt'); b.hidden=!n; b.textContent=n; }
 function renderFollow(){
   const f=followItems(); const w=$('#followWrap');
-  const row = (p, when, label) => `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:${S[p.status].color};flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${label} · ${esc(userName(p.last_knock_by))}${(()=>{ const k=A.knocks.filter(k=>k.property_id===p.id).reduce((a,k)=>!a||(k.created_at||0)>(a.created_at||0)?k:a,null); return k&&k.note?' · '+esc(k.note):''; })()}</div></div><span class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</span></div>`;
+  const row = (p, when, label) => `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:${S[p.status].color};flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${label} · ${esc(userName(p.last_knock_by))}${(()=>{ const k=A.knocks.filter(k=>k.property_id===p.id).reduce((a,k)=>!a||(k.created_at||0)>(a.created_at||0)?k:a,null); return k&&k.note?' · '+esc(k.note):''; })()}</div></div><span class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</span><button class="btn sm rowmap" data-map="${p.id}" aria-label="Show on map">📍</button></div>`;
   const sec = (title, arr, fn, empty) => `<div class="card"><div class="row between" style="margin-bottom:4px"><h3 style="font-size:18px">${title}</h3><span class="muted num">${arr.length}</span></div><div class="list">${arr.length?arr.map(fn).join(''):`<div class="muted" style="font-size:13px;padding:8px 0">${empty}</div>`}</div></div>`;
   const mineOnly = !isMgr();
   const myAppts = A.appts.filter(a => !mineOnly || a.user_id===A.me.id);
   const needs = myAppts.filter(a => (a.status==='scheduled'||a.status==='confirmed') && a.at < now()-30*60000).sort((a,b)=>b.at-a.at);
   const recent = myAppts.filter(a => (a.status==='held'||a.status==='no_show'||a.status==='cancelled') && a.updated_at > now()-7*DAY).sort((a,b)=>b.updated_at-a.updated_at).slice(0,8);
-  const arow = (a, when) => { const p=byId(A.props,a.property_id); if (!p) return ''; return `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:var(--s-appointment);flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${esc(userName(a.user_id))}${a.note?' · '+esc(a.note):''}</div></div><div style="text-align:right"><div class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</div>${apptChip(a)}</div></div>`; };
+  const arow = (a, when) => { const p=byId(A.props,a.property_id); if (!p) return ''; return `<div class="item" data-open="${p.id}"><span class="sw" style="width:12px;height:12px;border-radius:50%;background:var(--s-appointment);flex:none"></span><div class="body"><div class="t">${esc(p.address)} <span class="muted" style="font-weight:400">· ${esc(firstName(p.owner_name))}</span></div><div class="s">${esc(userName(a.user_id))}${a.note?' · '+esc(a.note):''}</div></div><div style="text-align:right"><div class="num" style="font-size:13px;font-weight:600;white-space:nowrap">${when}</div>${apptChip(a)}</div><button class="btn sm rowmap" data-map="${p.id}" aria-label="Show on map">📍</button></div>`; };
   w.innerHTML = `<div class="stack">
     <div class="row between"><h2>Follow-ups</h2><span class="muted" style="font-size:13px">${fmtDate(now())}</span></div>
     ${needs.length?sec('<span style="color:var(--warn)">Appointments needing an outcome</span>', needs, a=>arow(a, fmtDT(a.at)), ''):''}
-    ${f.overdue.length?sec('<span style="color:var(--bad)">Overdue callbacks</span>', f.overdue, p=>row(p, fmtRel(p.callback_at), 'Callback was '+fmtDT(p.callback_at)), ''):''}
+    ${f.overdue.length?sec('<span style="color:var(--bad)">Overdue follow-ups</span>', f.overdue, p=>row(p, fmtRel(p.callback_at), 'Follow-up was '+fmtDT(p.callback_at)), ''):''}
     ${sec('Appointments today', f.apptsToday.map(p=>apptOf(p)).filter(Boolean), a=>arow(a, fmtTime(a.at)), 'No appointments today.')}
-    ${sec('Callbacks today', f.today, p=>row(p, fmtTime(p.callback_at), 'Callback'), 'Nothing due. Go knock.')}
+    ${sec('Follow-ups today', f.today, p=>row(p, fmtTime(p.callback_at), 'Follow-up'), 'Nothing due. Go knock.')}
     ${sec('Interested, going cold', f.stale, p=>row(p, fmtRel(p.last_knock_at), 'Interested · no touch since'), 'Nobody slipping.')}
-    ${(()=>{ const items = f.upcoming.map(p=>({p,t:p.callback_at,ap:false})).concat(f.apptsUpcoming.map(p=>({p,t:apptOf(p).at,ap:true}))).sort((a,b)=>a.t-b.t); return sec('Next 7 days', items, x=>row(x.p, fmtDT(x.t), x.ap?'Appt · '+APPT_LABEL[apptOf(x.p).status]:'Callback'), 'Nothing scheduled.'); })()}
+    ${(()=>{ const items = f.upcoming.map(p=>({p,t:p.callback_at,ap:false})).concat(f.apptsUpcoming.map(p=>({p,t:apptOf(p).at,ap:true}))).sort((a,b)=>a.t-b.t); return sec('Next 7 days', items, x=>row(x.p, fmtDT(x.t), x.ap?'Appt · '+APPT_LABEL[apptOf(x.p).status]:'Follow-up'), 'Nothing scheduled.'); })()}
     ${recent.length?sec('Recent appointment outcomes', recent, a=>arow(a, fmtDate(a.at)), ''):''}
   </div>`;
-  w.onclick = e => { const r=e.target.closest('[data-open]'); if (r) openSheet(r.dataset.open); };
+  w.onclick = e => { const m=e.target.closest('[data-map]'); if (m){ e.stopPropagation(); showOnMap(m.dataset.map); return; } const r=e.target.closest('[data-open]'); if (r) openSheet(r.dataset.open); };
 }
 
 /* ============================================================
@@ -1825,7 +1846,7 @@ function renderMeView(){
       <div class="sugg" id="coachSugg"><button>Why am I getting fewer appointments?</button><button>When should I knock?</button><button>What should I do today?</button><button>How do I pitch this installer?</button></div>
       <div class="q"><input type="text" id="coachQ" placeholder="Ask anything about your doors"><button class="btn sm primary" id="coachAsk">Ask</button></div>
       <div class="a" id="coachA" hidden></div></div>
-    <div class="card stack"><h3 style="font-size:18px">Reminders</h3><div class="row between"><span>Callbacks 15 min before · appointments 60 min before · outcome nudges</span><span class="muted" style="font-size:12px;white-space:nowrap">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'On':'Off'}</span></div><div class="muted" style="font-size:12px">Shown while the app is open. Turn on notifications to get them in the background too; the office still texts you for anything you miss.</div><button class="btn sm" data-act="enablePush">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'Notifications are on':'Turn on notifications'}</button></div>
+    <div class="card stack"><h3 style="font-size:18px">Reminders</h3><div class="row between"><span>Follow-ups 15 min before · appointments 60 min before · outcome nudges</span><span class="muted" style="font-size:12px;white-space:nowrap">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'On':'Off'}</span></div><div class="muted" style="font-size:12px">Shown while the app is open. Turn on notifications to get them in the background too; the office still texts you for anything you miss.</div><button class="btn sm" data-act="enablePush">${(typeof NOTIFY!=='undefined'&&NOTIFY.permission==='granted')?'Notifications are on':'Turn on notifications'}</button></div>
     ${A.me.role==='admin'?`<div class="card stack"><h3 style="font-size:18px">Users</h3><div class="list" id="userList"></div><button class="btn sm" data-act="addUser">Add a rep</button></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">AI assistant</h3><div class="muted" style="font-size:13px">Use the company model, or plug in your own. Your key is stored encrypted on the server and used only for your briefs, drafts and coaching.</div>
       <div class="grid2"><label class="f">Provider<select id="aiProv"><option value="company">Company default</option><option value="openai">OpenAI (ChatGPT)</option><option value="anthropic">Anthropic (Claude)</option><option value="google">Google (Gemini)</option></select></label><label class="f">API key<input type="text" id="aiKey" placeholder="sk-…" autocomplete="off"></label></div>
@@ -1835,7 +1856,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v13 (zero-error sweep fixes).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v14 (Show on map, Set follow-up).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -2054,8 +2075,8 @@ function reminderTick(){
   const t=now(); const mineOnly = !isMgr();
   for (const p of A.props){
     if (p.status==='callback' && p.callback_at && (!mineOnly || isMine(p))){
-      const dt=p.callback_at-t; if (dt>0 && dt<=15*60000) remind('cb:'+p.id+':'+p.callback_at, 'Callback in '+Math.round(dt/60000)+' min', p.address+' · '+firstName(p.owner_name), p.id);
-      if (dt<0 && dt>-5*60000) remind('cbd:'+p.id+':'+p.callback_at, 'Callback is now', p.address+' · '+firstName(p.owner_name), p.id);
+      const dt=p.callback_at-t; if (dt>0 && dt<=15*60000) remind('cb:'+p.id+':'+p.callback_at, 'Follow-up in '+Math.round(dt/60000)+' min', p.address+' · '+firstName(p.owner_name), p.id);
+      if (dt<0 && dt>-5*60000) remind('cbd:'+p.id+':'+p.callback_at, 'Follow-up is now', p.address+' · '+firstName(p.owner_name), p.id);
     }
   }
   for (const a of A.appts){
@@ -2118,7 +2139,8 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
   .sbtn .sw{width:18px;height:18px}
   .btn{height:50px;font-size:15.5px;padding:0 18px}
   .btn.sm{height:42px;font-size:14.5px}
-  #saveKnock,#bookAppt{height:56px;font-size:17px;border-radius:12px}
+  #saveKnock,#bookAppt,#setFollow{height:56px;font-size:17px;border-radius:12px}
+  .rowmap{height:40px;min-width:44px;font-size:18px}
   .quick{gap:8px}
   .quick button{height:44px;padding:0 14px;font-size:14.5px}
   #sheetClose{height:40px;min-width:64px;font-size:15px}
@@ -2132,6 +2154,7 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
   #sheetBody .kv{font-size:15px;row-gap:8px}
 }
 #saveKnock:disabled{position:static;box-shadow:none}
+.rowmap{flex:none;margin-left:8px;padding:0 10px;height:34px}
 body{touch-action:pan-x pan-y}   /* only the map pinches (Leaflet handles its own touches); pinching the bars or the card no longer zooms the whole app */
 @media (max-height:500px){ .map-fabs{bottom:12px;flex-direction:row} .next-card{bottom:12px} }   /* phone turned sideways */
 .backdrop.show.block{pointer-events:auto}   /* on lists, a tap outside the card closes it instead of opening another house */
