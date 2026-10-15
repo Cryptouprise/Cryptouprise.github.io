@@ -451,7 +451,7 @@ const CONFIG = {
   reknockDays: 3,                              // "not home" becomes knockable again after N days
   onlineWindowMs: 2 * 60 * 1000,
   textTemplates: [
-    { id:'intro',    label:'Intro',    body:'Hi {first}, this is {rep} with Elite Solar Recovery. We stopped by about the solar system {installer} put on your home. Since they shut down, you may have options on that contract. Good time to talk today?' },
+    { id:'intro',    label:'Intro',    body:'Hi {first}, this is {rep} with Elite Solar Recovery. We stopped by about the solar system {installer} put on your home.{closure} Good time to talk today?' },
     { id:'callback', label:'Follow-up', body:'Hi {first}, {rep} from Elite Solar Recovery. Following up like we said. Does {when} still work?' },
     { id:'confirm',  label:'Confirm appt', body:'Hi {first}, confirming your appointment with Elite Solar Recovery on {when}. Reply YES to confirm or let me know if you need a different time.' }
   ]
@@ -890,7 +890,7 @@ function normalizeData(){
   for (const p of A.props){
     const st = normStatus(p.status); if (st !== p.status){ p.status = st; fixed++; }
     const tier = normTier(p.tier); if (tier !== p.tier){ p.tier = tier; fixed++; }
-    if (p.installer_status && p.installer_status !== 'bankrupt'){ if (/bankrupt|orphan|out of business|defunct/i.test(p.installer_status)) p.installer_status = 'bankrupt'; }
+    if (p.installer_status && p.installer_status !== 'bankrupt'){ if (/bankrupt|closed|orphan|out of business|defunct/i.test(p.installer_status)) p.installer_status = 'bankrupt'; }
     if (typeof p.lat === 'string') p.lat = parseFloat(p.lat); if (typeof p.lng === 'string') p.lng = parseFloat(p.lng);
     for (const k of ['last_knock_at','callback_at','appointment_at','created_at']) if (typeof p[k] === 'string') p[k] = new Date(p[k]).getTime();
   }
@@ -1100,7 +1100,7 @@ function filterChips(){
 }
 function visibleProps(){
   return A.props.filter(p => {
-    if (A.orphanOnly && !p.installer_status) return false;
+    if (A.orphanOnly && p.installer_status!=='bankrupt') return false;   // the portal stores 'bankrupt' (orphaned installer) or 'unknown'
     if (A.mine && !isMgr() && !inMyTerr(p)) return false;
     if (A.mine && isMgr() && myTerrs().length && !inMyTerr(p)) return false;
     switch (A.filter){
@@ -1388,7 +1388,7 @@ function renderSheet(){
         <div class="row" style="gap:6px;flex:none">${statusChip(p.status)}<button class="back" id="sheetClose" aria-label="Close" style="padding:0 10px">Close</button></div>
       </div>
       <div class="row" style="flex-wrap:wrap;gap:6px">
-        ${p.installer_status?`<span class="tag bad">${esc(String(p.installer_status).replace(/^./, c => c.toUpperCase()))}</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
+        ${p.installer_status==='bankrupt'?`<span class="tag bad">${/revok/i.test(p.installer_closed||'')?'License revoked':'Bankrupt'}</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
       </div>
       <div class="kv">
         <b>Owner</b><span>${esc(p.owner_name||'—')}</span>
@@ -1496,7 +1496,9 @@ async function saveKnock(){
 }
 function openTextModal(p){
   const body=document.createElement('div'); body.className='stack';
-  const fill = tpl => tpl.replace('{first}',firstName(p.owner_name)).replace('{rep}',firstName(A.me.name)).replace('{installer}',p.installer||'the installer').replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
+  // v19: only say an installer is gone when the data says so
+  const closure = p.installer_status!=='bankrupt' ? ' We help homeowners review their solar contract.' : /revok/i.test(p.installer_closed||'') ? ' Since their contractor license was revoked, you may have options on that contract.' : ' Since they shut down, you may have options on that contract.';
+  const fill = tpl => tpl.replace('{first}',firstName(p.owner_name)).replace('{rep}',firstName(A.me.name)).replace('{installer}',p.installer||'the installer').replace('{closure}', closure).replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
   body.innerHTML = `<div class="muted" style="font-size:13px">To <b class="num">${esc(p.owner_phone||'no phone on file')}</b> · opens your phone's Messages app with this text filled in</div>
     <div class="quick" id="tplQuick">${CONFIG.textTemplates.map((t,i)=>`<button data-i="${i}" class="${i===0?'on':''}">${esc(t.label)}</button>`).join('')}</div>
     <textarea id="txtBody" style="min-height:110px">${esc(fill(CONFIG.textTemplates[0].body))}</textarea>`;
@@ -1925,7 +1927,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     ${CONFIG.demo?`<div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>`:''}
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v17 (35,000-house list: offline store, on-screen pins, orphaned-installer filter).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v19 (35,000-house list; orphaned-installer filter fixed; texts and coach only say an installer is gone when it is).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -1971,8 +1973,8 @@ function askCoach(q){
     const f=followItems(); const kn=A.props.filter(p=>inMyTerr(p)&&isKnockable(p)).length;
     a = `Today:\n1. ${f.overdue.length} overdue follow-up${f.overdue.length===1?'':'s'} and ${f.today.length} due today — do those first, they book at ${me.fuApptRate?Math.round(me.fuApptRate*100)+'%':'3x the rate of fresh doors'}.\n2. ${f.apptsToday.length} appointment${f.apptsToday.length===1?'':'s'} today — confirm by text now.\n3. ${kn} knockable doors in your territory. At ${me.doorsPerHour?me.doorsPerHour.toFixed(0):'10'} doors an hour, save 4–8 pm for fresh doors.\nGoal: ${A.goals.daily_knocks} doors, ${A.goals.daily_contacts} talks, ${A.goals.daily_appts} appts.`;
   } else if (/pitch|say|script|installer|open/.test(q)){
-    const inst={}; A.props.filter(p=>inMyTerr(p)).forEach(p=>inst[p.installer]=(inst[p.installer]||0)+1); const topInst=Object.entries(inst).sort((a,b)=>b[1]-a[1])[0];
-    a = topInst ? `Most of your territory is ${topInst[0]} (${topInst[1]} homes). Open with the fact, not the offer: "${topInst[0]} shut down — do you know who services your system now?" For homes with a permit and no panels: "Are you still paying for a system that never got turned on?" Then book a 20-minute contract review. Never say "cancel your solar" at the door.` : 'Open with the installer by name and the year it shut down. Ask who services the system now. Book the review.';
+    const inst={}; A.props.filter(p=>inMyTerr(p)&&p.installer_status==='bankrupt').forEach(p=>inst[p.installer]=(inst[p.installer]||0)+1); const topInst=Object.entries(inst).sort((a,b)=>b[1]-a[1])[0];
+    a = topInst ? `Most of your orphaned-installer homes are ${topInst[0]} (${topInst[1]} homes). Open with the fact, not the offer: "${topInst[0]} is no longer there to service your system — do you know who does now?" For homes with a permit and no panels: "Are you still paying for a system that never got turned on?" Then book a 20-minute contract review. Never say "cancel your solar" at the door.` : 'No orphaned-installer homes in your territory. Open by asking how their solar system is working and who looks after it now. Book the review.';
   } else {
     a = `This month: ${me.doors} doors, ${me.contacts} talks (${Math.round(me.contactRate*100)}%), ${me.appts} appointments (${Math.round(me.apptRate*100)}% of talks), ${me.signed} signed. Average start ${fmtClock(me.avgStart)}, ${me.hoursPerDay.toFixed(1)} h a day. Ask me "why am I getting fewer appointments" or "when should I knock."`;
   }
