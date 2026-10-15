@@ -964,7 +964,7 @@ function startView(map){
   else map.fitBounds(b.pad(0.08), { maxZoom:17, animate:false });
 }
 function initMap(){
-  const map = L.map('map', { preferCanvas:true, zoomControl:false, attributionControl:false, tap:false });
+  const map = L.map('map', { preferCanvas:true, renderer:L.canvas({ tolerance:10 }), zoomControl:false, attributionControl:false, tap:false });   // tolerance: a tap within 10 px of a pin counts as hitting it
   A.map = map;
   startView(map);
   map.on('dragstart', () => { A.userMoved = true; });
@@ -1051,7 +1051,7 @@ function visibleProps(){
 function pinStyle(p){
   const css=getComputedStyle(document.documentElement); const s=S[p.status]||S.unknocked; const col=css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888';
   const big = p.status==='appointment'||p.status==='signed'||p.status==='callback';
-  const z = A.map ? A.map.getZoom() : 16; const base = z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4;
+  const z = A.map ? A.map.getZoom() : 16; const base = (z>=18?11: z>=17?9: z>=16?7: z>=15?5.5:4) * (window.matchMedia && matchMedia('(pointer: coarse)').matches ? 1.4 : 1);   // fingers, not mouse pointers: bigger pins on phones
   const dark = document.documentElement.getAttribute('data-theme')==='dark' || (document.documentElement.getAttribute('data-theme')!=='light' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
   return { radius: big?base+2:base, fillColor:col, color: (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
 }
@@ -1802,7 +1802,7 @@ function renderMeView(){
       <div class="eyebrow" style="margin-top:6px">Outbound webhooks</div><div class="list" id="hookList"></div>
       <div class="row" style="gap:8px"><input type="text" id="hookUrl" placeholder="https://your-n8n-or-aira/webhook/doorboss" style="flex:1"><button class="btn sm" data-act="addHook">Add</button></div></div>`:''}
     <div class="card stack"><h3 style="font-size:18px">Preview as</h3><div class="muted" style="font-size:13px">Demo only. In production the portal login decides the role.</div><select id="meSel">${A.users.map(u=>`<option value="${u.id}" ${u.id===A.me.id?'selected':''}>${esc(u.name)} · ${u.role}</option>`).join('')}</select></div>
-    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-14 v8 (phones: full-screen, out of the portal frame).</div>
+    <div class="muted" style="font-size:12px">DoorBoss · field canvassing for Elite Solar Recovery / Solar Freedom. Build 2026-10-15 v9 (phone-sized controls: bigger bar, buttons and pins).</div>
   </div>`;
   const ai=A.settings.ai||{}; $('#aiProv').value=ai.provider||'company'; $('#aiKey').value=ai.key?('••••••••'+ai.key.slice(-4)):'';
   renderKeys(); renderUsers();
@@ -2055,5 +2055,41 @@ async function start(snap){
 }
 if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(start); else start((window.claude && window.claude.hot && window.claude.hot.data) || {});
 </script>
+<style id="phone-app">
+/* Phone = app, not website (Charles 2026-10-15: "tiny little buttons, easy to click the wrong thing").
+   Applies to touch screens only; desktop managers keep the compact layout. Kept at the end so it wins over the base rules. */
+@media (pointer: coarse), (max-width: 600px){
+  body{font-size:16px}
+  input,textarea,select{font-size:16px !important}                 /* <16px makes iPhone zoom the page on focus */
+  .topbar{height:56px}
+  .tabbar{box-shadow:0 -2px 12px rgba(0,0,0,.12)}
+  .tab{height:68px;font-size:12.5px;gap:4px}
+  .tab svg{width:27px;height:27px}
+  .tab.on::before{content:"";position:absolute;top:0;left:22%;right:22%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+  .tab .cnt{top:7px;right:calc(50% - 26px);min-width:19px;height:19px;font-size:11px}
+  .chips{gap:8px;padding:2px 2px 6px}
+  .chip{height:40px;padding:0 15px;font-size:14px}
+  .map-fabs{gap:14px;bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+  .fab{width:56px;height:56px}
+  .fab svg{width:26px;height:26px}
+  .next-card{right:calc(84px + env(safe-area-inset-right,0px));bottom:calc(96px + env(safe-area-inset-bottom,0px));padding:12px 14px}
+  .next-card .t{font-size:16px}
+  .next-card .s{font-size:13px}
+  .next-card .go{height:44px;padding:0 16px;font-size:15px}
+  .status-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .sbtn{height:70px;font-size:13.5px;gap:6px;border-radius:12px}
+  .sbtn .sw{width:18px;height:18px}
+  .btn{height:50px;font-size:15.5px;padding:0 18px}
+  .btn.sm{height:42px;font-size:14.5px}
+  #saveKnock,#bookAppt{height:56px;font-size:17px;border-radius:12px}
+  .quick{gap:8px}
+  .quick button{height:44px;padding:0 14px;font-size:14.5px}
+  #sheetClose{height:40px;min-width:64px;font-size:15px}
+  .sheet .handle{width:56px;height:6px}
+  .draw-bar button{height:42px;padding:0 14px;font-size:14.5px}
+  .sub-tabs button{height:42px;font-size:14.5px;padding:0 15px}
+  .pill{height:32px;font-size:13px}
+}
+</style>
 </body>
 </html>
