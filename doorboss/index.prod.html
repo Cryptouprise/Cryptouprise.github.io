@@ -717,10 +717,18 @@ const DB = (() => {
   try { addEventListener('pagehide', savePropsNow); document.addEventListener('visibilitychange', () => { if (document.hidden) savePropsNow(); }); } catch(e){}
   async function loadLocal(){ try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){ queue=[]; } try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (c) cache = Object.assign(cache, c); } catch(e){} try { const kk = JSON.parse(localStorage.getItem(KKEY) || 'null'); if (kk && Array.isArray(kk.knocks)) cache.knocks = kk.knocks; } catch(e){}
     try { const rec = await IDB.get('props'); idbOK = true; if (rec && Array.isArray(rec.props)){ cache.props = rec.props; cache.propsSince = rec.propsSince || null; } } catch(e){ idbOK = false; } }
-  function saveQueue(){ try { localStorage.setItem(QKEY, JSON.stringify(queue)); } catch(e){} }
+  const gone = new Set();   // v22: ids THIS tab sent or undid, so merging with another tab's queue never brings them back
+  const qid = q => q.type==='knock' ? 'k:'+q.body.client_id : 'm:'+q.body.id;
+  function saveQueue(){   // v22: merge with what another tab (home-screen app + browser) saved; never silently overwrite it; a failed save is never silent
+    try {
+      let stored = []; try { stored = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){}
+      const mine = new Set(queue.map(qid)); for (const q of stored){ const id = qid(q); if (!mine.has(id) && !gone.has(id)){ queue.push(q); mine.add(id); } }
+      localStorage.setItem(QKEY, JSON.stringify(queue));
+    } catch(e){ try { toast('Phone storage is full: connect and sync now'); } catch(e2){} }
+  }
   function saveCache(){ try { localStorage.setItem(CKEY, JSON.stringify(cacheSnapshot(!idbOK))); } catch(e){} try { localStorage.setItem(KKEY, JSON.stringify({ knocks: (cache.knocks||[]).slice(-1500) })); } catch(e){} savePropsSoon(); }
   // queued (unsynced) knocks must keep showing after any reload of houses or knocks (I2)
-  function reapplyQueued(){ const have = new Set(cache.knocks.map(k => k.client_id)); for (const q of queue){ if (q.type==='knock' && !have.has(q.body.client_id)) applyKnockLocally(normKnock(q.body)); } }
+  function reapplyQueued(){ const have = new Set(cache.knocks.map(k => k.client_id)); for (const q of queue){ if (q.type!=='knock') continue; const k = normKnock(q.body); if (!have.has(q.body.client_id)) applyKnockLocally(k); else applyToProp(k); } }   // v22: houses load from a lazily-saved copy, so even knocks already in history must be laid back over them
   const maxStamp = (rows, f) => rows.reduce((m, x) => (x && x[f] && (!m || x[f] > m)) ? x[f] : m, null);
   function mergeBy(list, fresh, keyOf){ const idx = new Map(list.map((x,i) => [keyOf(x), i])); for (const x of fresh){ const k = keyOf(x); if (idx.has(k)) list[idx.get(k)] = x; else { idx.set(k, list.length); list.push(x); } } }
 
@@ -740,10 +748,10 @@ const DB = (() => {
   const normTerr = t => Object.assign({}, t, { created_at:ts(t.created_at) });
 
   // Apply a queued knock to the local cache so the map updates instantly, offline or not
-  function applyKnockLocally(k){
+  function applyKnockLocally(k){ applyToProp(k); cache.knocks.push(k); }
+  function applyToProp(k){   // v22: the house part on its own, so a restart can re-apply a queued knock that is already in history
     const p = cache.props.find(x => x.id===k.property_id); if (!p) return;
     if (!p.last_knock_at || k.created_at >= p.last_knock_at){ p.status=k.status; p.last_knock_at=k.created_at; p.last_knock_by=k.user_id; p.callback_at = k.status==='callback'?k.callback_at:null; p.appointment_at = k.status==='appointment'?k.appointment_at:(k.status==='signed'?null:p.appointment_at); }
-    cache.knocks.push(k);
   }
 
   return {
@@ -846,10 +854,14 @@ const DB = (() => {
         if (knocks.length){
           const res = await api('POST','/knocks', knocks);      // idempotent on client_id
           for (const r of (res||[])){ const k = cache.knocks.find(x => x.client_id===r.client_id); if (k){ k.id=r.id; k.synced_at=ts(r.synced_at)||Date.now(); } }
-          const sent = new Set(knocks.map(k => k.client_id));
-          queue = queue.filter(q => !(q.type==='knock' && sent.has(q.body.client_id))); n += knocks.length; saveQueue(); lastSentAt = Date.now();
+          // v22: drop only what the server confirmed. If it answered with a list that misses some knocks, keep those for a retry; after 3 tries park them on the phone and say so.
+          const acked = Array.isArray(res) ? new Set(res.map(r => r && r.client_id)) : null;
+          const sent = new Set(knocks.filter(k => !acked || acked.has(k.client_id)).map(k => k.client_id)); const lost = [];
+          for (const k of knocks){ if (sent.has(k.client_id)) continue; const q = queue.find(x => x.type==='knock' && x.body.client_id===k.client_id); if (!q) continue; q.tries = (q.tries||0) + 1; if (q.tries >= 3){ sent.add(k.client_id); lost.push(q.body); } }
+          if (lost.length){ try { const u = JSON.parse(localStorage.getItem('doorboss.unacked.v1') || '[]'); localStorage.setItem('doorboss.unacked.v1', JSON.stringify(u.concat(lost))); } catch(e){} try { toast(lost.length+' knock'+(lost.length===1?'':'s')+' the server did not confirm are saved on this phone: tell your manager'); } catch(e){} }
+          sent.forEach(id => gone.add('k:'+id)); queue = queue.filter(q => !(q.type==='knock' && sent.has(q.body.client_id))); n += sent.size; saveQueue(); lastSentAt = Date.now();
         }
-        for (const q of queue.filter(q => q.type==='message')){ await api('POST','/messages', q.body); queue = queue.filter(x => x!==q); n++; saveQueue(); }
+        for (const q of queue.filter(q => q.type==='message')){ await api('POST','/messages', q.body); gone.add(qid(q)); queue = queue.filter(x => x!==q); n++; saveQueue(); }
         saveCache();
         return n;
       })().finally(() => { flushing = null; });
@@ -860,7 +872,7 @@ const DB = (() => {
     release(cid){ held.delete(cid); },
     async undoKnock(cid, prev){   // only possible while the knock is still on the phone; once sent it is on the server
       const qi = queue.findIndex(q => q.type==='knock' && q.body.client_id===cid); if (qi < 0) return false;
-      const body = queue[qi].body; queue.splice(qi, 1); held.delete(cid);
+      const body = queue[qi].body; queue.splice(qi, 1); gone.add('k:'+cid); held.delete(cid);
       cache.knocks = cache.knocks.filter(k => k.client_id !== cid);
       const p = cache.props.find(x => x.id === body.property_id);
       if (p && prev){ p.status = prev.status; p.last_knock_at = prev.last_knock_at; p.last_knock_by = prev.last_knock_by; p.callback_at = prev.callback_at; p.appointment_at = prev.appointment_at; }
@@ -1285,6 +1297,10 @@ function showCtx(e){
 }
 function hideCtx(){ $('#ctx').hidden=true; }
 
+function nearZip(ll){   // v22: a hand-added house borrows zip + city from the nearest house within 400 m (a blank zip never matched on later imports)
+  let best=null, bd=1e9; for (const x of A.props){ if (!x.zip) continue; const d=haversine(ll,[x.lat,x.lng]); if (d<bd){ bd=d; best=x; } }
+  return best && bd<400 ? { zip:best.zip, city:best.city||'' } : { zip:'', city:'' };
+}
 function openAddHouse(ll){
   const body=document.createElement('div'); body.className='stack';
   body.innerHTML = `<label class="f">Address<input type="text" id="ah_addr" placeholder="15420 E Jewell Ave"></label>
@@ -1294,7 +1310,7 @@ function openAddHouse(ll){
     <div class="muted" style="font-size:12px">Pin: ${ll[0].toFixed(5)}, ${ll[1].toFixed(5)}</div>`;
   openModal({ title:'Add a house', body, actions:[{label:'Cancel'},{label:'Add and knock',primary:true,onClick:async()=>{
     const addr=$('#ah_addr').value.trim(); if (!addr){ toast('Address is required'); return false; }
-    const r = await DB.upsertProperties([{ lat:ll[0], lng:ll[1], address:addr, city:'', zip:'', owner_name:$('#ah_owner').value.trim(), owner_phone:$('#ah_phone').value.trim(), installer:$('#ah_inst').value.trim()||'Unknown', installer_status:'unknown', tier:$('#ah_tier').value, finance_co:$('#ah_fin').value.trim(), source:'Rep added', created_at:now() }]);
+    const r = await DB.upsertProperties([{ lat:ll[0], lng:ll[1], address:addr, city:nearZip(ll).city, zip:nearZip(ll).zip, owner_name:$('#ah_owner').value.trim(), owner_phone:$('#ah_phone').value.trim(), installer:$('#ah_inst').value.trim()||'Unknown', installer_status:'unknown', tier:$('#ah_tier').value, finance_co:$('#ah_fin').value.trim(), source:'Rep added', created_at:now() }]);
     await reload(); renderPins(); const p=A.props.find(x=>x.address===addr && !x.last_knock_at); if (p) openSheet(p.id); toast(r.added?'House added':'Updated');
   }}] });
   setTimeout(()=>$('#ah_addr').focus(), 50);
@@ -1424,6 +1440,28 @@ function renderSheet(){
       <div class="row" style="flex-wrap:wrap;gap:6px">
         ${p.installer_status==='bankrupt'?`<span class="tag bad">${licTag(p.installer_closed)}</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
       </div>
+      ${(() => { const ap = apptOf(p); if (!ap) return ''; const open = ap.status==='scheduled'||ap.status==='confirmed'; const past = ap.at <= now();
+        return `<div class="appt-card"><div class="row between"><div><div class="eyebrow">Appointment</div><div class="when num">${fmtDT(ap.at)}</div></div>${apptChip(ap)}</div>
+          <div class="muted" style="font-size:12px">Set by ${esc(userName(ap.user_id))} · ${ap.ghl_event_id?'on the GHL calendar':'syncing to GHL calendar'}${ap.note?' · '+esc(ap.note):''}</div>
+          ${ap.pending ? '<div class="muted" style="font-size:12px">Saved on this phone · syncing</div>' : ''}${open && !ap.pending ? `<div class="quick" id="apActs">${ap.status==='scheduled'?'<button data-ap="confirmed">Confirmed</button>':''}${past?'<button data-ap="held">Held</button><button data-ap="no_show">No-show</button>':''}<button data-ap="rescheduled">Reschedule</button><button data-ap="cancelled">Cancel</button></div>` : ''}
+          <div id="apResult" hidden><div class="eyebrow" style="margin-bottom:6px">How did it go?</div><div class="quick"><button data-res="signed">Signed</button><button data-res="follow_up">Needs follow-up</button><button data-res="lost">Lost</button></div></div>
+          <div id="apWhen" hidden><input type="datetime-local" id="apWhenInput"><button class="btn sm primary" id="apWhenSave" style="margin-top:6px">Save new time</button></div>
+        </div>`; })()}
+      <div>
+        <div class="eyebrow" style="margin-bottom:8px">Log this door</div>
+        <div class="status-grid">
+          ${STATUSES.filter(s=>s.id!=='unknocked').map(s=>`<button class="sbtn${sel===s.id?' on':''}" data-st="${s.id}"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</button>`).join('')}
+        </div>
+      </div>
+      ${needsWhen?`<div class="stack" style="gap:8px"><div class="eyebrow">${sel==='callback'?'Follow-up when':'Appointment when'}</div>
+        <div class="quick" id="quickWhen">
+          ${sel==='callback'?`<button data-min="120">In 2 hours</button><button data-tmr="17">Tomorrow 5 pm</button><button data-days="2">In 2 days</button><button data-days="7">Next week</button>`:`<button data-tmr="10">Tomorrow 10 am</button><button data-tmr="18">Tomorrow 6 pm</button><button data-days="2">In 2 days 6 pm</button>`}
+        </div>
+        <input type="datetime-local" id="whenInput" value="${A.pendingWhen?toLocalInput(A.pendingWhen):''}"></div>`:''}
+      ${sel==='callback'||sel==='interested'||sel==='appointment'?`<label class="okText"><input type="checkbox" id="okText" ${A.pendingTextOk?'checked':''}> They said it's OK to text them</label>`:''}
+      <label class="f">Note<textarea id="noteInput" placeholder="${sel==='signed'?'Docs uploaded? Both owners signed?':'What they said, who was home…'}"></textarea></label>
+      <div class="photo-row" id="photoRow">${(A.pendingPhotos||[]).map((d,i)=>`<img src="${d}" alt="Photo ${i+1}">`).join('')}</div>
+      <button class="btn primary block" id="saveKnock" ${sel?'':'disabled'}>${sel? 'Save · '+esc(S[sel].label) : 'Pick an outcome'}</button>
       <div class="kv">
         <b>Owner</b><span>${esc(p.owner_name||'—')}</span>
         <b>Phone</b><span>${p.owner_phone?`<span class="num">${esc(p.owner_phone)}</span> <a class="btn sm primary" href="tel:${esc(String(p.owner_phone).replace(/[^\d+]/g,''))}">📞 Call</a> <button class="btn sm" data-copy="${esc(p.owner_phone)}">Copy</button>`:'—'}</span>
@@ -1442,30 +1480,8 @@ function renderSheet(){
         <button class="btn sm" id="shBrief">AI door brief</button>
       </div>
       <div id="briefBox" hidden></div>
-      ${(() => { const ap = apptOf(p); if (!ap) return ''; const open = ap.status==='scheduled'||ap.status==='confirmed'; const past = ap.at <= now();
-        return `<div class="appt-card"><div class="row between"><div><div class="eyebrow">Appointment</div><div class="when num">${fmtDT(ap.at)}</div></div>${apptChip(ap)}</div>
-          <div class="muted" style="font-size:12px">Set by ${esc(userName(ap.user_id))} · ${ap.ghl_event_id?'on the GHL calendar':'syncing to GHL calendar'}${ap.note?' · '+esc(ap.note):''}</div>
-          ${ap.pending ? '<div class="muted" style="font-size:12px">Saved on this phone · syncing</div>' : ''}${open && !ap.pending ? `<div class="quick" id="apActs">${ap.status==='scheduled'?'<button data-ap="confirmed">Confirmed</button>':''}${past?'<button data-ap="held">Held</button><button data-ap="no_show">No-show</button>':''}<button data-ap="rescheduled">Reschedule</button><button data-ap="cancelled">Cancel</button></div>` : ''}
-          <div id="apResult" hidden><div class="eyebrow" style="margin-bottom:6px">How did it go?</div><div class="quick"><button data-res="signed">Signed</button><button data-res="follow_up">Needs follow-up</button><button data-res="lost">Lost</button></div></div>
-          <div id="apWhen" hidden><input type="datetime-local" id="apWhenInput"><button class="btn sm primary" id="apWhenSave" style="margin-top:6px">Save new time</button></div>
-        </div>`; })()}
       ${sel==='appointment'||isOpenAp(apptOf(p))||(p.status==='appointment'&&!apptOf(p))?'':`<button class="btn primary block" id="bookAppt">📅 Book appointment · pick a day &amp; time</button>`}
       ${sel==='callback'?'':`<button class="btn block" id="setFollow">🔁 Set follow-up · pick a day &amp; time</button>`}
-      <div>
-        <div class="eyebrow" style="margin-bottom:8px">Log this door</div>
-        <div class="status-grid">
-          ${STATUSES.filter(s=>s.id!=='unknocked').map(s=>`<button class="sbtn${sel===s.id?' on':''}" data-st="${s.id}"><span class="sw" style="background:${s.color}"></span>${esc(s.label)}</button>`).join('')}
-        </div>
-      </div>
-      ${needsWhen?`<div class="stack" style="gap:8px"><div class="eyebrow">${sel==='callback'?'Follow-up when':'Appointment when'}</div>
-        <div class="quick" id="quickWhen">
-          ${sel==='callback'?`<button data-min="120">In 2 hours</button><button data-tmr="17">Tomorrow 5 pm</button><button data-days="2">In 2 days</button><button data-days="7">Next week</button>`:`<button data-tmr="10">Tomorrow 10 am</button><button data-tmr="18">Tomorrow 6 pm</button><button data-days="2">In 2 days 6 pm</button>`}
-        </div>
-        <input type="datetime-local" id="whenInput" value="${A.pendingWhen?toLocalInput(A.pendingWhen):''}"></div>`:''}
-      ${sel==='callback'||sel==='interested'||sel==='appointment'?`<label class="okText"><input type="checkbox" id="okText" ${A.pendingTextOk?'checked':''}> They said it's OK to text them</label>`:''}
-      <label class="f">Note<textarea id="noteInput" placeholder="${sel==='signed'?'Docs uploaded? Both owners signed?':'What they said, who was home…'}"></textarea></label>
-      <div class="photo-row" id="photoRow">${(A.pendingPhotos||[]).map((d,i)=>`<img src="${d}" alt="Photo ${i+1}">`).join('')}</div>
-      <button class="btn primary block" id="saveKnock" ${sel?'':'disabled'}>${sel? 'Save · '+esc(S[sel].label) : 'Pick an outcome'}</button>
       ${hist.length?`<div><div class="eyebrow" style="margin-bottom:8px">History · ${hist.length} knock${hist.length===1?'':'s'}</div><div class="hist">${hist.slice(0,8).map(k=>`<div class="h"><b>${esc(S[k.status].label)}</b> <span class="muted">· ${esc(userName(k.user_id))} · ${fmtDT(k.created_at)}</span>${k.note?`<div class="muted">${esc(k.note)}</div>`:''}${(k.photos&&k.photos.length)||k.photo_url?`<div class="photo-row" style="margin-top:4px">${(k.photos||[k.photo_url]).map(u=>`<img src="${u}" alt="Door photo">`).join('')}</div>`:''}</div>`).join('')}</div></div>`:`<div class="muted" style="font-size:13px">No knocks yet. ${tier.note?esc(tier.note):''}</div>`}
     </div>`;
   $('#sheetClose').onclick = closeSheet;
@@ -1559,9 +1575,9 @@ function openTextModal(p){
   // v19: only say an installer is gone when the data says so
   const why = licReason(p.installer_closed);
   const closure = p.installer_status!=='bankrupt' ? ' We help homeowners review their solar contract.' : why==='inactive' ? ' Since their contractor license is no longer active, you may have options on that contract.' : why ? ' Since their contractor license was '+why+', you may have options on that contract.' : ' Since they shut down, you may have options on that contract.';
-  const inst = p.installer || 'the installer';
-  const what = p.tier==='verified_installed' ? 'the solar system '+inst+' put on your home' : 'the solar permit '+inst+' pulled for your home';   // v21: never say a system was installed unless the permit was finaled
-  const fill = tpl => tpl.replace('{what}', what).replace('{first}',ownerFirst(p)).replace('{rep}',firstName(A.me.name)).replace('{installer}',p.installer||'the installer').replace('{closure}', closure).replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
+  const inst = (p.installer && !/^unknown$/i.test(String(p.installer).trim())) ? p.installer : 'the installer';   // v22: houses added by hand have installer 'Unknown'
+  const what = p.tier==='verified_installed' ? 'the solar system '+inst+' put on your home' : (p.tier==='none' ? 'the solar on your home' : 'the solar permit '+inst+' pulled for your home');   // v21: never say a system was installed unless the permit was finaled
+  const fill = tpl => tpl.replace('{what}', what).replace('{first}',ownerFirst(p)).replace('{rep}',firstName(A.me.name)).replace('{installer}',inst).replace('{closure}', closure).replace('{when}', p.appointment_at?fmtDT(p.appointment_at): p.callback_at?fmtDT(p.callback_at):'that time');
   body.innerHTML = `<div class="muted" style="font-size:13px">To <b class="num">${esc(p.owner_phone||'no phone on file')}</b> · opens your phone's Messages app with this text filled in</div>
     <div class="quick" id="tplQuick">${CONFIG.textTemplates.map((t,i)=>`<button data-i="${i}" class="${i===0?'on':''}">${esc(t.label)}</button>`).join('')}</div>
     <textarea id="txtBody" style="min-height:110px">${esc(fill(CONFIG.textTemplates[0].body))}</textarea>`;
@@ -1902,7 +1918,7 @@ async function importCsv(file){
     if (!isFinite(lat)||!isFinite(lng)){ skipped++; continue; }
     const tierRaw=g('tier').toLowerCase(); const tier = tierRaw.includes('uninst')||tierRaw.includes('no_panel')||tierRaw.includes('no panel') ? 'verified_uninstalled' : tierRaw.includes('inst')||tierRaw.includes('panel') ? 'verified_installed' : tierRaw.includes('permit') ? 'permit_only' : 'none';
     const addr = g('address')||g('street')||g('property_address')||g('street_address')||g('site_address')||g('situs_address')||g('property_street')||g('address1')||g('address_line_1')||g('full_address'); if (!addr){ noAddr++; continue; }
-    list.push({ lat, lng, address:addr, city:g('city')||g('property_city'), state:g('state')||g('property_state')||'CO', zip:g('zip')||g('postal_code')||g('zip_code')||g('zipcode')||g('postal')||g('property_zip'), owner_name:g('owner_name')||g('owner')||[g('first_name'),g('last_name')].filter(Boolean).join(' '), owner_phone:g('owner_phone')||g('phone')||g('mobile'), owner_email:g('owner_email')||g('email'), installer:g('installer')||g('contractor')||g('installer_of_record'), installer_status:g('installer_status')||'bankrupt', installer_closed:g('installer_closed')||g('bankruptcy_year'), tier, permit_year:g('permit_year')||(g('permit_date')||'').slice(0,4), system_kw:g('system_kw')||g('kw'), finance_co:g('finance_co')||g('lender'), source:g('source')||file.name });
+    list.push({ lat, lng, address:addr, city:g('city')||g('property_city'), state:g('state')||g('property_state')||'NV', zip:g('zip')||g('postal_code')||g('zip_code')||g('zipcode')||g('postal')||g('property_zip'), owner_name:g('owner_name')||g('owner')||[g('first_name'),g('last_name')].filter(Boolean).join(' '), owner_phone:g('owner_phone')||g('phone')||g('mobile'), owner_email:g('owner_email')||g('email'), installer:g('installer')||g('contractor')||g('installer_of_record'), installer_status:g('installer_status')||'bankrupt', installer_closed:g('installer_closed')||g('bankruptcy_year'), tier, permit_year:g('permit_year')||(g('permit_date')||'').slice(0,4), system_kw:g('system_kw')||g('kw'), finance_co:g('finance_co')||g('lender'), source:g('source')||file.name });
   }
   const res=await DB.upsertProperties(list); await reload(); renderPins(); renderTerritories();
   $('#csvResult').textContent = `${res.added} added, ${res.updated} updated${skipped?', '+skipped+' skipped (no lat/lng)':''}${noAddr?', '+noAddr+' skipped (no address column)':''}.`; toast(`Imported ${res.added+res.updated}`);
