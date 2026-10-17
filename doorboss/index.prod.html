@@ -3198,7 +3198,7 @@ window.CW_DECKS = [
   try {
     if (window.__dbPerfLoaded) return; window.__dbPerfLoaded = true;
     const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
-    const P = { metric: 'doors', window: 'today', cohort: false, scope: 'company', board: null, comps: null, feed: null, pace: null, risk: null, usage: null, msg: '', busy: {}, timer: null, newOpen: false };
+    const P = { metric: 'doors', window: 'today', cohort: false, scope: 'company', board: null, comps: null, feed: null, pace: null, risk: null, usage: null, profile: null, msg: '', busy: {}, timer: null, newOpen: false };
     const admin = () => { try { return !!(A && A.me && A.me.role === 'admin'); } catch (e) { return false; } };
     const hasTeam = () => { try { return !!(A && A.me && A.me.team_id); } catch (e) { return false; } };
     const $ = id => document.getElementById(id);
@@ -3248,6 +3248,17 @@ window.CW_DECKS = [
         (u.rows.length ? u.rows.map(r => '<div class="pf-row"><span class="pf-name">' + esc(r.team === 'company' ? 'Company' : 'Team ' + String(r.team).slice(0, 8)) + ' · ' + esc(K[r.kind] || r.kind) + '</span><span class="pf-n">' + esc(r.qty) + '</span><span class="pf-dim" style="width:92px;text-align:right">bill $' + esc(Number(r.billable_usd || 0).toFixed(2)) + '</span></div>').join('') : '<div class="pf-dim">No usage recorded yet this month.</div>') +
         '<div class="pf-dim">Would bill $' + esc(Number(u.total_billable_usd || 0).toFixed(2)) + ' · our cost $' + esc(Number(u.total_our_cost_usd || 0).toFixed(2)) + '</div></div>';
     }
+    function profileCard() {
+      /* the rep's own record: totals, streak, best day, badges earned vs locked, what is next. All computed by the service from real knocks; nothing hand-awarded. */
+      const p = P.profile; if (!p) return '<div class="card stack" id="pfProfile"><h3 style="font-size:18px">Your record</h3><div class="pf-dim">Loading…</div></div>';
+      const s = p.profile || {}; const tile = (n, l) => '<div style="flex:1 1 70px;min-width:70px;text-align:center;padding:8px 4px;border-radius:10px;background:var(--line,#eef1f4)"><div class="pf-n" style="font-size:20px">' + esc(n) + '</div><div class="pf-dim" style="font-size:12px">' + esc(l) + '</div></div>';
+      const ICON = { first_door: '🚪', doors_50: '🥉', doors_100: '💯', doors_500: '🥈', doors_1000: '🥇', big_day_60: '⚡', big_day_100: '🔥', first_appt: '📅', appts_10: '📆', first_signed: '✍️', streak_3: '🔗', streak_7: '🗓️', streak_14: '🏔️', week_250: '🚀', derby_win: '🏆' };
+      return '<div class="card stack" id="pfProfile"><h3 style="font-size:18px">Your record <span class="pf-dim">· ' + esc(p.earned) + ' of ' + esc((p.badges || []).length) + ' badges</span></h3>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">' + tile(s.doors || 0, 'doors') + tile(s.appts || 0, 'appointments') + tile(s.signed || 0, 'signed') + tile(s.streak || 0, 'day streak') + tile(s.best_day ? s.best_day.n : 0, 'best day') + '</div>' +
+        '<div class="pf-badges" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">' + (p.badges || []).map(b => '<span class="pf-badge' + (b.earned ? ' on' : '') + '" title="' + esc(b.how) + '" style="border:1px solid var(--line,#dfe5ea);border-radius:14px;padding:5px 9px;font-size:13px;' + (b.earned ? 'background:#fff4ee;border-color:#f05a1a;font-weight:700' : 'opacity:.45') + '">' + (ICON[b.id] || '') + ' ' + esc(b.label) + '</span>').join('') + '</div>' +
+        ((p.next || []).length ? '<div class="pf-dim" style="margin-top:6px">Next: ' + esc(p.next.join(' · ')) + '</div>' : '') +
+        (s.best_week ? '<div class="pf-dim">Best week: ' + esc(s.best_week.n) + ' doors (week of ' + esc(s.best_week.week_of) + ')' + (s.derby_wins ? ' · ' + esc(s.derby_wins) + ' competition win' + (s.derby_wins > 1 ? 's' : '') : '') + '</div>' : '') + '</div>';
+    }
     function paceCard() {
       const p = P.pace; if (!p) return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace</h3><div class="pf-dim">Loading…</div></div>';
       const L = { doors: 'Doors', contacts: 'Contacts', appts: 'Appointments' };
@@ -3259,7 +3270,7 @@ window.CW_DECKS = [
         (P.msg ? '<div class="pf-msg">' + esc(P.msg) + '</div>' : '') + (!f ? '<div class="pf-dim">Loading…</div>' : f.events.length ? f.events.slice(0, 12).map(e => '<div class="pf-ev">' + ({ appointment: '📅 ', signed: '✍️ ', personal_best: '🏅 ', winner: '🏆 ', shout: '📣 ' }[e.kind] || '') + esc(e.text) + '<small>' + esc(String(e.t).replace('T', ' ').slice(0, 16)) + '</small></div>').join('') : '<div class="pf-dim">Quiet so far today. Appointments, signings, personal bests and shout-outs show up here for the whole team.</div>') + '</div>';
     }
     function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); } host.innerHTML = boardCard() + compCard() + riskCard(); wire(host); }
-    function paintMe() { const w = $('meWrap'); if (!w) return; injectCss(); let host = $('pfMe'); if (!host) { host = document.createElement('div'); host.id = 'pfMe'; host.className = 'stack'; const stack = w.querySelector('.stack'); if (stack && stack.children.length > 1) stack.insertBefore(host, stack.children[1]); else w.appendChild(host); } host.innerHTML = paceCard() + feedCard() + usageCard(); wire(host); }
+    function paintMe() { const w = $('meWrap'); if (!w) return; injectCss(); let host = $('pfMe'); if (!host) { host = document.createElement('div'); host.id = 'pfMe'; host.className = 'stack'; const stack = w.querySelector('.stack'); if (stack && stack.children.length > 1) stack.insertBefore(host, stack.children[1]); else w.appendChild(host); } host.innerHTML = paceCard() + profileCard() + feedCard() + usageCard(); wire(host); }
     function wire(host) {
       host.querySelectorAll('[data-pf="metric"] button').forEach(b => b.onclick = () => { P.metric = b.dataset.k; loadBoard(); });
       host.querySelectorAll('[data-pf="window"] button').forEach(b => b.onclick = () => { P.window = b.dataset.k; loadBoard(); });
@@ -3272,6 +3283,7 @@ window.CW_DECKS = [
       host.querySelectorAll('[data-pf="shout"]').forEach(b => b.onclick = postShout);
     }
     async function loadBoard() { try { P.board = await call('/perf/board', { metric: P.metric, window: P.window, cohort: P.cohort, scope: P.scope }); } catch (e) { P.board = { rows: [], as_of: '', error: e.message }; } paintTeam(); }
+    async function loadProfile() { try { P.profile = await call('/perf/badges', {}); } catch (e) { P.profile = { profile: {}, badges: [], earned: 0, next: [], error: e.message }; } paintMe(); }
     async function loadUsage() { if (!admin()) return; try { P.usage = await call('/billing/usage', {}); } catch (e) { P.usage = { month: '', rows: [], error: e.message }; } paintMe(); }
     async function loadComps() { try { P.comps = await call('/perf/competitions', {}); } catch (e) {} paintTeam(); }
     async function loadRisk() { if (!mgr()) return; try { P.risk = await call('/perf/risk', {}); } catch (e) {} paintTeam(); }
@@ -3284,11 +3296,11 @@ window.CW_DECKS = [
     }
     async function endComp(id) { if (!(typeof confirmBox === 'function')) return; confirmBox('End this competition?', 'The current leader is announced as the winner in the team feed.', async () => { try { await call('/perf/compete', { action: 'end', id }); toast('Winner announced'); await loadComps(); await loadFeed(); } catch (e) { toast(String(e.message)); } }, 'End it'); }
     async function postShout() { const i = $('pfShout'); const text = (i && i.value || '').trim(); if (!text) return; try { await call('/perf/shout', { text }); i.value = ''; P.msg = ''; await loadFeed(); } catch (e) { P.msg = String(e.message); paintMe(); } }
-    function tick() { if (!$('view-team') || !$('view-me')) return; if (!$('view-team').hidden) { loadBoard(); loadComps(); loadRisk(); } if (!$('view-me').hidden) { loadPace(); loadFeed(); loadUsage(); } }
+    function tick() { if (!$('view-team') || !$('view-me')) return; if (!$('view-team').hidden) { loadBoard(); loadComps(); loadRisk(); } if (!$('view-me').hidden) { loadPace(); loadFeed(); loadProfile(); loadUsage(); } }
     const _team = window.renderTeam; if (typeof _team === 'function') window.renderTeam = function () { const r = _team.apply(this, arguments); try { paintTeam(); if (!P.board) { loadBoard(); loadComps(); loadRisk(); } } catch (e) { console.warn('perf team', e); } return r; };
-    const _me = window.renderMeView; if (typeof _me === 'function') window.renderMeView = function () { const r = _me.apply(this, arguments); try { paintMe(); if (!P.pace) { loadPace(); loadFeed(); loadUsage(); } } catch (e) { console.warn('perf me', e); } return r; };
+    const _me = window.renderMeView; if (typeof _me === 'function') window.renderMeView = function () { const r = _me.apply(this, arguments); try { paintMe(); if (!P.pace) { loadPace(); loadFeed(); loadProfile(); loadUsage(); } } catch (e) { console.warn('perf me', e); } return r; };
     P.timer = setInterval(() => { try { if (document.visibilityState === 'visible') tick(); } catch (e) {} }, 60000);
-    window.DBPerf = { state: P, loadBoard, loadComps, loadFeed, loadPace, loadRisk, loadUsage };
+    window.DBPerf = { state: P, loadBoard, loadComps, loadFeed, loadPace, loadRisk, loadUsage, loadProfile };
   } catch (err) { console.warn('performance layer failed to start (the rest of DoorBoss is unaffected):', err); }
 })();
 
