@@ -964,6 +964,9 @@ function openModal({ title, body, actions=[] }){
 }
 function closeModal(){ $('#modal').hidden=true; }
 $('#modal').addEventListener('click', e => { if (e.target.id==='modal') closeModal(); });
+const TEXTOK_KEY='doorboss.textok.v1';   // v22.1: "They said OK" is remembered per house on this phone (cleared at sign-out) and flows into the next knock as text_ok
+function textOkLocal(id){ try { return !!(JSON.parse(localStorage.getItem(TEXTOK_KEY)||'{}'))[id]; } catch(e){ return false; } }
+function rememberTextOk(id){ try { const m=JSON.parse(localStorage.getItem(TEXTOK_KEY)||'{}'); m[id]=Date.now(); const ks=Object.keys(m); if (ks.length>500) ks.sort((a,b)=>m[a]-m[b]).slice(0,ks.length-500).forEach(k=>{ delete m[k]; }); localStorage.setItem(TEXTOK_KEY, JSON.stringify(m)); } catch(e){} if (A.sheetProp && A.sheetProp.id===id) A.pendingTextOk=true; }
 function confirmBox(title, text, onYes, yesLabel='Yes'){ openModal({ title, body:`<p>${esc(text)}</p>`, actions:[{label:'Cancel'},{label:yesLabel,primary:true,onClick:onYes}] }); }
 async function copyText(t){ try { await navigator.clipboard.writeText(t); toast('Copied'); } catch(e){ openModal({ title:'Copy', body:`<textarea id="cpy" style="min-height:80px">${esc(t)}</textarea>` }); setTimeout(()=>{ const x=$('#cpy'); if (x){ x.focus(); x.select(); } },50); } }
 function statusChip(id, light){ const s=S[id]||S.unknocked; return `<span class="status-chip${light?' light':''}" style="${light?'':'background:'+s.color}">${light?`<i class="sw" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${s.color}"></i>`:''}${esc(s.label)}</span>`; }
@@ -1504,7 +1507,9 @@ function renderSheet(){
   const wi=$('#whenInput'); if (wi) wi.onchange=()=>{ A.pendingWhen = wi.value ? new Date(wi.value).getTime() : null; };
   $('#saveKnock').onclick = saveKnock;
   const pi=$('#photoInput'); if (pi) pi.onchange = async () => { const f=pi.files[0]; if (!f) return; try { const d=await compressImage(f, 1280, 0.72); (A.pendingPhotos ||= []).push(d); const note=$('#noteInput').value; renderSheet(); $('#noteInput').value=note; } catch(e){ toast('Could not read that photo'); } };
-  $('#shBrief').onclick = async()=>{ const b=await DB.aiBrief(p); const box=$('#briefBox'); box.hidden=false; box.innerHTML=`<div class="brief"><b>${esc(b.headline)}</b><br>${b.lines.map(esc).join('<br>')}</div>`; };
+  $('#shBrief').onclick = async()=>{ const btn=$('#shBrief'); if (A.briefBusy) return; A.briefBusy=true; if (btn) btn.disabled=true;   /* v22.1: one paid call per tap, never two */
+    try { const b=await DB.aiBrief(p); const box=$('#briefBox'); if (box){ box.hidden=false; box.innerHTML=`<div class="brief"><b>${esc(b.headline)}</b><br>${(b.lines||[]).map(esc).join('<br>')}</div>`; } }
+    catch(e){ toast('Could not get the AI brief right now'); } finally { A.briefBusy=false; const b2=$('#shBrief'); if (b2) b2.disabled=false; } };
   $('#shText').onclick = ()=>openTextModal(p);
   const apActs=$('#apActs'); if (apActs){ const ap=apptOf(p);
     apActs.onclick = async e => { const b=e.target.closest('button'); if (!b) return; const st=b.dataset.ap;
@@ -1531,7 +1536,7 @@ function toastUndo(msg, onUndo){
 async function signOut(){
   let n = await DB.queueLength();
   if (n && navigator.onLine){ try { await flushQueue(); } catch(e){} n = await DB.queueLength(); }
-  const go = async () => { try { await DB.wipeLocal(); } catch(e){} try { localStorage.removeItem('doorboss.token'); localStorage.removeItem('repAccessKey'); } catch(e){} try { (window.top||window).location.href='/login'; } catch(e){ location.href='/login'; } };
+  const go = async () => { try { await DB.wipeLocal(); } catch(e){} try { localStorage.removeItem('doorboss.token'); localStorage.removeItem('repAccessKey'); localStorage.removeItem('doorboss.textok.v1'); } catch(e){} try { (window.top||window).location.href='/login'; } catch(e){ location.href='/login'; } };
   confirmBox('Sign out?', n ? ('You have '+n+' knock'+(n===1?'':'s')+' that have not synced yet. Get signal and tap Sync now first, or those knocks are lost.') : 'This clears the houses and your login from this phone.', go, n ? 'Sign out and lose them' : 'Sign out');
 }
 /* One appointment action at a time; on failure say so; only redraw the card if the rep is still on that house (v16) */
@@ -1585,8 +1590,8 @@ function openTextModal(p){
     if (!p.owner_phone){ toast('No phone on file'); return false; }
     const num=String(p.owner_phone).replace(/[^\d+]/g,''); const txt=$('#txtBody').value;
     const go = () => { (window.top||window).location.href='sms:'+num+'?&body='+encodeURIComponent(txt); };
-    if (A.knocks.some(k => k.property_id===p.id && k.text_ok)) { go(); return; }   // v21: consent is on file
-    confirmBox('No OK to text on file', 'Only text if they told you it is OK. Tap the button only if they did.', go, 'They said OK');
+    if (A.knocks.some(k => k.property_id===p.id && k.text_ok) || textOkLocal(p.id)) { go(); return; }   // v21: consent is on file (v22.1: or remembered on this phone)
+    confirmBox('No OK to text on file', 'Only text if they told you it is OK. Tap the button only if they did.', () => { rememberTextOk(p.id); go(); }, 'They said OK');
   }}] });
   $('#tplQuick').onclick=e=>{ const b=e.target.closest('button'); if(!b) return; $$('#tplQuick button').forEach(x=>x.classList.toggle('on',x===b)); $('#txtBody').value=fill(CONFIG.textTemplates[b.dataset.i].body); };
 }
@@ -1918,7 +1923,7 @@ async function importCsv(file){
     if (!isFinite(lat)||!isFinite(lng)){ skipped++; continue; }
     const tierRaw=g('tier').toLowerCase(); const tier = tierRaw.includes('uninst')||tierRaw.includes('no_panel')||tierRaw.includes('no panel') ? 'verified_uninstalled' : tierRaw.includes('inst')||tierRaw.includes('panel') ? 'verified_installed' : tierRaw.includes('permit') ? 'permit_only' : 'none';
     const addr = g('address')||g('street')||g('property_address')||g('street_address')||g('site_address')||g('situs_address')||g('property_street')||g('address1')||g('address_line_1')||g('full_address'); if (!addr){ noAddr++; continue; }
-    list.push({ lat, lng, address:addr, city:g('city')||g('property_city'), state:g('state')||g('property_state')||'NV', zip:g('zip')||g('postal_code')||g('zip_code')||g('zipcode')||g('postal')||g('property_zip'), owner_name:g('owner_name')||g('owner')||[g('first_name'),g('last_name')].filter(Boolean).join(' '), owner_phone:g('owner_phone')||g('phone')||g('mobile'), owner_email:g('owner_email')||g('email'), installer:g('installer')||g('contractor')||g('installer_of_record'), installer_status:g('installer_status')||'bankrupt', installer_closed:g('installer_closed')||g('bankruptcy_year'), tier, permit_year:g('permit_year')||(g('permit_date')||'').slice(0,4), system_kw:g('system_kw')||g('kw'), finance_co:g('finance_co')||g('lender'), source:g('source')||file.name });
+    list.push({ lat, lng, address:addr, city:g('city')||g('property_city'), state:g('state')||g('property_state')||'NV', zip:g('zip')||g('postal_code')||g('zip_code')||g('zipcode')||g('postal')||g('property_zip'), owner_name:g('owner_name')||g('owner')||[g('first_name'),g('last_name')].filter(Boolean).join(' '), owner_phone:g('owner_phone')||g('phone')||g('mobile'), owner_email:g('owner_email')||g('email'), installer:g('installer')||g('contractor')||g('installer_of_record'), installer_status:g('installer_status')||'unknown', installer_closed:g('installer_closed')||g('bankruptcy_year'), tier, permit_year:g('permit_year')||(g('permit_date')||'').slice(0,4), system_kw:g('system_kw')||g('kw'), finance_co:g('finance_co')||g('lender'), source:g('source')||file.name });
   }
   const res=await DB.upsertProperties(list); await reload(); renderPins(); renderTerritories();
   $('#csvResult').textContent = `${res.added} added, ${res.updated} updated${skipped?', '+skipped+' skipped (no lat/lng)':''}${noAddr?', '+noAddr+' skipped (no address column)':''}.`; toast(`Imported ${res.added+res.updated}`);
@@ -2252,7 +2257,7 @@ function reminderTick(){
 function showAuthWall(err){
   const msg = /401|403|Unauthorized|Forbidden/.test(String(err && err.message)) ? 'Your session has expired or you are not signed in.' : 'Could not reach the server. Check your connection and try again.';
   document.body.insertAdjacentHTML('beforeend', `<div class="authwall"><div class="box"><div class="brand"><span class="dot"></span>${esc(CONFIG.appName)}</div><h2>Sign in to start knocking</h2><p>${msg}</p><button class="btn primary" id="authGo">Sign in</button><button class="btn" id="authRetry">Try again</button><div class="muted small">${esc(String(err && err.message || ''))}</div></div></div>`);
-  $('#authGo').onclick = () => { try { localStorage.removeItem('doorboss.token'); localStorage.removeItem('repAccessKey'); } catch(e){} const u = '/login'; try { (window.top || window).location.href = u; } catch(e){ location.href = u; } };
+  $('#authGo').onclick = () => { try { localStorage.removeItem('doorboss.token'); localStorage.removeItem('repAccessKey'); localStorage.removeItem('doorboss.textok.v1'); } catch(e){} const u = '/login'; try { (window.top || window).location.href = u; } catch(e){ location.href = u; } };
   $('#authRetry').onclick = () => location.reload();
 }
 async function start(snap){
@@ -2487,11 +2492,24 @@ window.CW_DECKS = [
       return String(s || '').replace(/\{first\}/g, first(p)).replace(/\{rep\}/g, firstName((A.me && A.me.name) || 'your rep')).replace(/\{installer\}/g, instOf(p))
         .replace(/\{closure\}/g, bank ? ' Their record shows: ' + closureWords(p) + '.' : '').replace(/\{noclosure\}/g, bank ? '' : " I don't see a license action on file for them yet, so let's write down what you heard and check.");
     }
+    const boardName = p => (String((p && p.state) || '').toUpperCase() === 'NV' ? 'Nevada State Contractors Board' : 'state contractors board');   // v27: never name Nevada for a house in another state
     function loadSaved(id) { try { return (JSON.parse(localStorage.getItem(KEY) || '{}'))[id] || null; } catch (e) { return null; } }
-    function persist() {
-      try { const all = JSON.parse(localStorage.getItem(KEY) || '{}'); all[C.id] = { docs: C.docs, they: C.they, consent: C.consent, notes: C.notes, t: Date.now() }; localStorage.setItem(KEY, JSON.stringify(all)); } catch (e) {}
-      const el = document.getElementById('cwSaved'); if (el) { el.textContent = 'Saved ✓'; clearTimeout(savedT); savedT = setTimeout(() => { const e2 = document.getElementById('cwSaved'); if (e2) e2.textContent = ''; }, 1500); }
+    function persist() {   // v27: says "Saved" only after the phone really stored it; a full or blocked storage shows a warning instead of a false tick
+      if (!C) return; let ok = true;
+      try {
+        const all = JSON.parse(localStorage.getItem(KEY) || '{}'); all[C.id] = { docs: C.docs, they: C.they, consent: C.consent, notes: C.notes, t: Date.now() };
+        const ids = Object.keys(all); if (ids.length > 250) ids.sort((a, b) => (all[a].t || 0) - (all[b].t || 0)).slice(0, ids.length - 250).forEach(k => { delete all[k]; });   // oldest houses drop out first, never the one on screen
+        localStorage.setItem(KEY, JSON.stringify(all));
+      } catch (e) { ok = false; if (!warnedSave) { warnedSave = true; try { toast('This phone could not save the call notes. Finish the call and save the outcome soon.'); } catch (x) {} } }
+      C.unsaved = !ok; paintSaved(ok);
     }
+    function paintSaved(ok) {
+      const el = document.getElementById('cwSaved'); if (!el) return; el.textContent = ok ? 'Saved ✓' : '⚠ Not saved on this phone'; clearTimeout(savedT);
+      if (ok) savedT = setTimeout(() => { const e2 = document.getElementById('cwSaved'); if (e2 && !(C && C.unsaved)) e2.textContent = ''; }, 1500);
+    }
+    hooks.afterRender.push(() => { if (C && C.unsaved) paintSaved(false); });   // a re-render after a tap must not wipe the warning
+    function persistSoon() { clearTimeout(persistT); persistT = setTimeout(persist, 300); }   // typing: one write per pause, not per keystroke
+    let persistT = null, warnedSave = false, showWin = null;
     const secs = () => (C && C.live) ? Math.max(0, Math.round((Date.now() - C.startedAt) / 1000)) : 0;
     const clock = () => String(Math.floor(secs() / 60)).padStart(2, '0') + ':' + String(secs() % 60).padStart(2, '0');
     const money = v => { const n = parseFloat(String(v || '').replace(/[^0-9.]/g, '')); return isFinite(n) ? n : null; };
@@ -2603,7 +2621,7 @@ window.CW_DECKS = [
         '<b>On record</b><span>' + esc(p.owner_name || '—') + '</span>' +
         '<b>Phone</b><span>' + (phone ? '<a href="tel:' + esc(phone) + '" data-cw="startcall">' + esc(p.owner_phone) + '</a>' : '—') + '</span>' +
         '<b>Installer</b><span>' + esc(p.installer && !/^unknown$/i.test(p.installer) ? p.installer : 'Not known') + (bank ? ' <span class="cw-ver bad">' + esc(closureWords(p)) + '</span>' : '') + '</span>' +
-        '<b></b><span>' + (bank ? '<span class="cw-ver ok">Verified</span> <span class="cw-priv">' + (licReason(p.installer_closed) ? 'Nevada State Contractors Board record' : 'Public reports') + '</span>' : '<span class="cw-priv">No closure or license action on file in our records</span>') + '</span>' +
+        '<b></b><span>' + (bank ? '<span class="cw-ver ok">Verified</span> <span class="cw-priv">' + (licReason(p.installer_closed) ? boardName(p) + ' record' : 'Public reports') + '</span>' : '<span class="cw-priv">No closure or license action on file in our records</span>') + '</span>' +
         '<b>Permit</b><span>' + esc(p.permit_year ? 'Filed ' + p.permit_year : '—') + (p.system_kw ? ' · ' + esc(p.system_kw) + ' kW' : '') + '</span></div></div>' +
         '<div class="cw-card"><h3>Client-reported details <span class="cw-ver said">Reported by client</span></h3><div class="cw-kv">' +
         '<b>Told cost</b><input class="cw-in" data-they="promised" placeholder="$ per month" inputmode="decimal" value="' + esc(C.they.promised) + '">' +
@@ -2650,7 +2668,7 @@ window.CW_DECKS = [
       const bank = p.installer_status === 'bankrupt', r = licReason(p.installer_closed);
       const inst = (p.installer && !/^unknown$/i.test(p.installer)) ? p.installer : 'Your solar installer';
       const banner = bank ? closureWords(p).replace(/^./, c => c.toUpperCase()) : 'No closure or license action on file in our records';
-      const src = bank ? (r ? 'Source: Nevada State Contractors Board public license record' : 'Based on public reports of the company closing') : '';
+      const src = bank ? (r ? 'Source: ' + boardName(p) + ' public license record' : 'Based on public reports of the company closing') : '';
       const css = 'font-family:Barlow,Arial,sans-serif;max-width:700px;width:100%;text-align:center;border:1px solid #dfe5ea;border-radius:16px;padding:34px 28px;box-shadow:0 10px 30px rgba(10,20,30,.08)';
       const body = '<div style="' + css + '"><div style="font-size:14px;letter-spacing:.12em;text-transform:uppercase;color:#5a6773;font-weight:700">Elite Solar Recovery</div>' +
         '<div style="margin-top:6px;display:inline-block;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#0b7a68;background:#e6f5f1;padding:4px 10px;border-radius:999px">✔ Public record check</div>' +
@@ -2672,6 +2690,7 @@ window.CW_DECKS = [
       const p = prop(); if (!p) return; let w = null; try { w = window.open('', 'doorboss_show', 'width=980,height=720'); } catch (e) {}
       if (!w) { toast('Allow pop-ups to open a separate window, or use Show here'); return; }
       w.document.open(); w.document.write(evidence(p, true)); w.document.close();
+      try { w.opener = null; } catch (e) {} showWin = w;   // v27: the homeowner-facing window cannot reach back into the call screen, and it closes with the call
     }
 
     function fire(id, heard) {
@@ -2691,6 +2710,7 @@ window.CW_DECKS = [
     function startCall() { if (C && !C.live) { C.live = true; C.startedAt = Date.now(); } }
 
     function open(id) {
+      if (!allowed()) { try { toast('The call screen is for managers.'); } catch (e) {} return; }   // v27: the gate lives here too, not only on the button (CW.open is reachable from the console)
       const p = byId(A.props, id); if (!p) return; injectCss(); if (typeof closeSheet === 'function') closeSheet();
       const saved = loadSaved(id) || {};
       C = { id, live: false, startedAt: null, seed: Math.floor(Math.random() * 1000), stage: 0, qi: STAGES.map(() => 0), active: null, heard: '', noMatch: false, anim: false, allOpen: false, fired: [], unmatched: [], fb: {}, consent: Object.assign({ rec: false, text: false, docs: false }, saved.consent || {}),
@@ -2705,6 +2725,8 @@ window.CW_DECKS = [
       render(); clearInterval(tick); tick = setInterval(() => { const t = document.getElementById('cwTimer'); if (t && C && C.live) { t.textContent = clock(); const s = secs(); t.className = s >= 1200 ? 'red' : s >= 900 ? 'amber' : ''; } }, 1000);
     }
     function close() {
+      clearTimeout(persistT); if (C) persist();   // flush what was being typed
+      try { if (showWin && !showWin.closed) showWin.close(); } catch (e) {} showWin = null;
       clearInterval(tick); tick = null; document.removeEventListener('keydown', onKey);
       try { if (mq) { mq.removeEventListener ? mq.removeEventListener('change', onResize) : mq.removeListener(onResize); } } catch (e) {} mq = null;
       for (const f of hooks.onClose) { try { f(); } catch (e) { console.warn('call hook', e); } }
@@ -2714,7 +2736,7 @@ window.CW_DECKS = [
     function showGap() { const g = document.getElementById('cwGap'); if (g) g.innerHTML = gapHtml() ? '<div class="cw-gap">' + esc(gapHtml()) + '</div>' : ''; }
     function onInput(e) {
       const t = e.target; if (!C) return;
-      if (t.dataset && t.dataset.they) { C.they[t.dataset.they] = t.value; persist(); showGap(); } else if (t.id === 'cwNotes') { C.notes = t.value; persist(); } else if (t.id === 'cwSay') updateSug(t.value);
+      if (t.dataset && t.dataset.they) { C.they[t.dataset.they] = t.value; persistSoon(); showGap(); } else if (t.id === 'cwNotes') { C.notes = t.value; persistSoon(); } else if (t.id === 'cwSay') updateSug(t.value);
     }
     function onSayKey(e) { if (e.target && e.target.id === 'cwSay' && e.key === 'Enter') { e.preventDefault(); submitSay(); } }
     function onKey(e) {
@@ -2733,9 +2755,11 @@ window.CW_DECKS = [
       const p = prop(); if (!p) return; const note = summary(), st = OUTCOMES[kind], textOk = !!C.consent.text; persist(); const id = p.id; close();
       openSheet(id);
       setTimeout(() => {
-        A.pendingTextOk = textOk && ['interested', 'callback', 'appointment'].includes(st); setPending(st); renderSheet();
-        const n = document.getElementById('noteInput'); if (n) n.value = note;
-        if (st === 'not_interested') saveKnock({ quick: true }); else toast(st === 'appointment' ? 'Pick the day and time, then Save' : 'Check the details, then Save');
+        try {
+          A.pendingTextOk = textOk && ['interested', 'callback', 'appointment'].includes(st); setPending(st); renderSheet();
+          const n = document.getElementById('noteInput'); if (n) n.value = note;
+          if (st === 'not_interested') saveKnock({ quick: true }); else toast(st === 'appointment' ? 'Pick the day and time, then Save' : 'Check the details, then Save');
+        } catch (err) { console.warn('call finish', err); try { toast('Could not hand the outcome to the house card. Your notes are saved on this device; log the outcome from the house.'); } catch (e2) {} }   // v27: a failure here never loses the call notes silently
       }, 350);
     }
     function vib() { try { if (navigator.vibrate) navigator.vibrate(8); } catch (e) {} }
@@ -2819,7 +2843,7 @@ window.CW_DECKS = [
 .pz-diff{margin-top:18px;text-align:center;font-size:clamp(24px,3.6vw,44px);font-weight:800}.pz-diff small{display:block;font-size:.55em;font-weight:600;color:#5a6773}
 .pz-list{max-width:900px;margin:0 auto;display:grid;gap:10px}.pz-item{display:flex;align-items:center;gap:16px;width:100%;text-align:left;padding:16px 20px;border-radius:14px;border:1px solid #dfe5ea;background:#fff;font-size:clamp(20px,2.8vw,32px);color:#121a22}
 .pz-item i{flex:none;width:36px;height:36px;border-radius:50%;border:3px solid #cfd8df;display:grid;place-items:center;font-style:normal;font-weight:800;font-size:20px}.pz-item.s2 i{background:#15a35a;border-color:#15a35a;color:#fff}.pz-item.s1 i{border-color:#e0a800;color:#8a6a00}.pz-item em{margin-left:auto;font-style:normal;font-size:.6em;color:#5a6773}
-.pz-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:18px;max-width:1000px;margin:0 auto}.pz-col{background:#fff;border:1px solid #dfe5ea;border-radius:16px;padding:20px}.pz-col h3{margin:0 0 10px;font-size:clamp(20px,2.6vw,30px)}.pz-col li{font-size:clamp(18px,2.4vw,28px);margin:8px 0}
+.pz-two{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(300px,100%),1fr));gap:18px;max-width:1000px;margin:0 auto}.pz-col{background:#fff;border:1px solid #dfe5ea;border-radius:16px;padding:20px}.pz-col h3{margin:0 0 10px;font-size:clamp(20px,2.6vw,30px)}.pz-col li{font-size:clamp(18px,2.4vw,28px);margin:8px 0}
 .pz-tl{max-width:900px;margin:0 auto}.pz-ev{padding:16px 20px;margin:10px 0;border-left:6px solid #f05a1a;background:#fff;border-radius:0 14px 14px 0}.pz-ev b{display:block;font-size:clamp(16px,2vw,22px);color:#5a6773}.pz-ev span{font-size:clamp(20px,2.8vw,32px);font-weight:700}
 .pz-opts{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;max-width:1000px;margin:0 auto}.pz-opt{padding:20px;border-radius:16px;border:2px solid #dfe5ea;background:#fff;text-align:left;color:#121a22;font-size:clamp(20px,2.6vw,30px);font-weight:800}.pz-opt.on{border-color:#f05a1a;background:#fff4ee}.pz-opt em{display:block;font-style:normal;font-weight:500;font-size:.72em;color:#46525e;margin-top:8px}
 .pz-faq{max-width:920px;margin:0 auto;display:grid;gap:10px}.pz-q{width:100%;text-align:left;padding:16px 20px;border-radius:14px;border:1px solid #dfe5ea;background:#fff;color:#121a22;font-size:clamp(20px,2.7vw,30px);font-weight:700}.pz-q.on{border-color:#f05a1a}.pz-q p{margin:10px 0 0;font-size:.8em;font-weight:500;color:#2f3b46}
@@ -2922,7 +2946,7 @@ window.CW_DECKS = [
         refresh(); });
       c.addEventListener('change', e => { if (e.target.id === 'pzDeck') { PR.deck = e.target.value; PR.i = 0; refresh(); c.innerHTML = cardInner(); } });
     });
-    CW.hooks.onClose.push(function () { closeHere(); closeWin(); clearInterval(PR.timer); PR.timer = null; });
+    CW.hooks.onClose.push(function () { closeHere(); closeWin(); clearInterval(PR.timer); PR.timer = null; PR.i = 0; PR.state = {}; PR.sig = ''; });   // v27: slide position and ticks never carry from one house to the next
     CW.present = { decks: DECKS, state: PR, open: openHere, openWindow: openWin, go: i => { PR.i = i; refresh(); }, setDeck: id => { PR.deck = id; PR.i = 0; refresh(); }, KNOWN: Object.keys(R) };
   } catch (err) { console.warn('presentation mode failed to start (the call screen is unaffected):', err); }
 })();
