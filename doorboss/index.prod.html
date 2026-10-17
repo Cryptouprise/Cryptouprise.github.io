@@ -3115,5 +3115,68 @@ window.CW_DECKS = [
 })();
 
 </script>
+<script>
+/* DoorBoss AREA LOADER card v1 (Charles 10/17: "click a few buttons and skip trace and get phone numbers in certain areas").
+   Managers/admins get a "Phones for an area" card on the Me tab: type a ZIP, Check (free: how many homes have no phone and what it costs), then
+   Trace phones (one background job on the Hermes service: skip trace by address, quality gate, phones written only where blank). Progress polls every 6 s.
+   Reps never see it. Everything shown is plain text. */
+(function () {
+  try {
+    if (window.__dbLoaderLoaded) return; window.__dbLoaderLoaded = true;
+    const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
+    const L = { plan: null, busy: false, poll: null, msg: '', jobs: [] };
+    const $ = id => document.getElementById(id);
+    const mgr = () => { try { return !!(A && A.me && (A.me.role === 'admin' || A.me.role === 'manager')); } catch (e) { return false; } };
+    const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
+    const nearZipGuess = () => { try { const p = A.myPos; if (!p || !A.props) return ''; let best = null, bd = 1e9; for (const h of A.props) { if (!h.zip) continue; const d = Math.abs(h.lat - p[0]) + Math.abs(h.lng - p[1]); if (d < bd) { bd = d; best = h.zip; } } return best || ''; } catch (e) { return ''; } };
+    async function call(path, body) {
+      const tok = token(); if (!tok) throw new Error('Sign out and back in to DoorBoss once, then try again.');
+      const r = await fetch(AI_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout ? AbortSignal.timeout(45000) : undefined });
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      if (!r.ok) throw new Error(j.error || ('error ' + r.status)); return j;
+    }
+    const money = n => '$' + Number(n || 0).toFixed(2);
+    function status(j) { return j.status === 'done' ? '✓ ' + j.message : j.status === 'failed' ? '⚠ ' + j.message : '… ' + j.message; }
+    function card() {
+      const p = L.plan, running = L.jobs.find(j => j.status !== 'done' && j.status !== 'failed');
+      return '<div class="card stack" id="ldCard"><h3 style="font-size:18px">Phones for an area</h3>' +
+        '<div class="muted" style="font-size:13px">Skip-traces the homes in a ZIP that have no phone yet (address → owner\'s current cell). About 0.7¢ a home. Only orphaned-installer homes unless you untick the box.</div>' +
+        '<div class="row" style="gap:8px;flex-wrap:wrap"><input class="cw-in" id="ldZip" inputmode="numeric" maxlength="5" placeholder="ZIP" value="' + esc(L.zip || '') + '" style="width:110px" aria-label="ZIP code"><label style="display:flex;align-items:center;gap:6px;font-size:14px"><input type="checkbox" id="ldOrph" ' + (L.orph === false ? '' : 'checked') + '> orphaned-installer homes only</label><button type="button" class="btn sm" id="ldCheck"' + (L.busy ? ' disabled' : '') + '>Check</button></div>' +
+        (p ? '<div class="muted" id="ldPlan">' + esc(p.homes + ' homes in ' + p.zip + ' · ' + p.no_phone + ' without a phone · ' + p.orphaned_no_phone + ' of those are orphaned-installer homes') + '<br><b>' + esc(p.will_trace ? 'Trace ' + p.will_trace + ' homes for about ' + money(p.est_cost) : (p.note || 'Nothing to trace')) + '</b>' + (p.will_trace ? ' · ' + esc(money(p.cap_left) + ' left in today\'s budget') : '') + '</div>' : '') +
+        (p && p.will_trace && !running ? '<button type="button" class="btn primary" id="ldTrace"' + (L.busy ? ' disabled' : '') + '>Trace phones (' + money(p.est_cost) + ')</button>' : '') +
+        (L.msg ? '<div class="vc-msg" id="ldMsg">' + esc(L.msg) + '</div>' : '') +
+        (L.jobs.length ? '<div class="stack" id="ldJobs" style="gap:4px">' + L.jobs.slice(0, 4).map(j => '<div style="font-size:13px"><b>' + esc(j.zip) + '</b> · ' + esc(j.n + ' homes') + (j.written ? ' · ' + esc(j.written + ' phones') : '') + (j.cost ? ' · ' + esc(money(j.cost)) : '') + '<br><span class="muted">' + esc(status(j)) + '</span></div>').join('') + '</div>' : '') +
+        '</div>';
+    }
+    function paint() { const w = $('meWrap'); if (!w || !mgr()) return; let c = $('ldCard'); const html = card(); if (c) { c.outerHTML = html; } else { const stack = w.querySelector('.stack'); if (stack) stack.insertAdjacentHTML('beforeend', html); } wire(); }
+    function wire() {
+      const z = $('ldZip'); if (z) z.oninput = () => { L.zip = z.value.replace(/\D/g, '').slice(0, 5); };
+      const o = $('ldOrph'); if (o) o.onchange = () => { L.orph = o.checked; L.plan = null; paint(); };
+      const c = $('ldCheck'); if (c) c.onclick = check; const t = $('ldTrace'); if (t) t.onclick = trace;
+    }
+    async function check() {
+      L.zip = ($('ldZip') || { value: L.zip }).value.replace(/\D/g, '').slice(0, 5); if (L.zip.length !== 5) { L.msg = 'Type a 5-digit ZIP.'; paint(); return; }
+      L.busy = true; L.msg = ''; paint();
+      try { L.plan = await call('/area/plan', { zip: L.zip, orphaned_only: L.orph !== false }); } catch (e) { L.msg = String(e.message || e); }
+      L.busy = false; paint();
+    }
+    async function trace() {
+      if (!L.plan || !L.plan.will_trace) return; L.busy = true; L.msg = ''; paint();
+      try { const r = await call('/area/trace', { zip: L.zip, orphaned_only: L.orph !== false, max: L.plan.will_trace }); L.msg = 'Started: ' + r.job.n + ' homes, about ' + money(r.est_cost) + '. Phones appear on the map as they come in.'; L.plan = null; startPoll(); }
+      catch (e) { L.msg = String(e.message || e); }
+      L.busy = false; paint();
+    }
+    async function refreshJobs() { try { const r = await call('/area/jobs', {}); L.jobs = r.jobs || []; } catch (e) {} paint(); if (!L.jobs.some(j => j.status !== 'done' && j.status !== 'failed')) stopPoll(); }
+    function startPoll() { stopPoll(); refreshJobs(); L.poll = setInterval(() => { if (!$('ldCard')) return stopPoll(); refreshJobs(); }, 6000); }
+    function stopPoll() { clearInterval(L.poll); L.poll = null; }
+    const _me = window.renderMeView;
+    if (typeof _me === 'function') {
+      window.renderMeView = function () { const r = _me.apply(this, arguments); try { if (mgr()) { if (!L.zip) L.zip = nearZipGuess(); paint(); if (!L.jobs.length) refreshJobs(); } } catch (e) { console.warn('area loader', e); } return r; };
+    }
+    window.DBLoader = { check, trace, refreshJobs, state: L };
+  } catch (err) { console.warn('area loader failed to start (the rest of DoorBoss is unaffected):', err); }
+})();
+
+</script>
 </body>
 </html>
