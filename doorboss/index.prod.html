@@ -3070,6 +3070,9 @@ window.CW_DECKS = [
     if (window.__dbAskLoaded) return; window.__dbAskLoaded = true;
     const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
     const CHIPS = ['Who do I call back today?', 'What appointments do I have coming up?', 'How are my numbers this week?', 'Best houses to knock near me', 'Which interested homeowners have I not followed up with?'];
+    /* v37: managers get team-insight prompts (the service already answers over the whole team for manager/admin sign-ins) */
+    const MGR_CHIPS = ['Who has not knocked today?', 'Who is under half their daily goal right now?', 'Who has gone dark for 2 days or more?', 'Who set the most appointments this week?', 'Which callbacks across the team are overdue?', 'Where did we sign this week and who did it?'];
+    const isMgr = () => { try { const AA = (typeof A !== 'undefined') ? A : window.A; return !!(AA && AA.me && (AA.me.role === 'admin' || AA.me.role === 'manager')); } catch (e) { return false; } };
     const S = { open: false, busy: false, turns: [] };
     const $ = id => document.getElementById(id);
     const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
@@ -3088,12 +3091,16 @@ window.CW_DECKS = [
         '<div class="ask-note" id="askNote">Answers come only from your own doors, callbacks and appointments. It never texts or changes anything.</div><div class="ask-chips" id="askChips"></div>' +
         '<form class="ask-bar" id="askForm"><input id="askIn" maxlength="500" placeholder="Ask about your leads…" autocomplete="off" aria-label="Your question"><button type="submit" id="askGo">Ask</button></form>';
       document.body.appendChild(p);
-      const chips = $('askChips'); for (const c of CHIPS) { const b = document.createElement('button'); b.type = 'button'; b.textContent = c; b.onclick = () => send(c); chips.appendChild(b); }
       $('askClose').onclick = close; $('askForm').onsubmit = e => { e.preventDefault(); send($('askIn').value); };
       document.addEventListener('keydown', e => { if (S.open && e.key === 'Escape') close(); });
     }
     function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; $('askLog').appendChild(d); $('askLog').scrollTop = $('askLog').scrollHeight; return d; }
-    function open() { build(); $('askPanel').hidden = false; S.open = true; if (!$('askLog').children.length) line('ask-a', 'Hi! Ask me anything about your doors: who to call back, your appointments, your numbers, or the best houses near you.'); setTimeout(() => { try { $('askIn').focus(); } catch (e) {} }, 50); }
+    function paintChips() {
+      const chips = $('askChips'); if (!chips) return; chips.textContent = ''; const m = isMgr();
+      for (const c of (m ? MGR_CHIPS.concat(CHIPS.slice(0, 2)) : CHIPS)) { const b = document.createElement('button'); b.type = 'button'; b.textContent = c; b.onclick = () => send(c); chips.appendChild(b); }
+      const n = $('askNote'); if (n) n.textContent = m ? 'Manager view: answers come from the whole team’s doors, callbacks and appointments. It never texts or changes anything.' : 'Answers come only from your own doors, callbacks and appointments. It never texts or changes anything.';
+    }
+    function open() { build(); paintChips(); $('askPanel').hidden = false; S.open = true; if (!$('askLog').children.length) line('ask-a', isMgr() ? 'Hi! Ask me about the team: who has not knocked today, who is under goal, who went dark, who is setting appointments.' : 'Hi! Ask me anything about your doors: who to call back, your appointments, your numbers, or the best houses near you.'); setTimeout(() => { try { $('askIn').focus(); } catch (e) {} }, 50); }
     function close() { if ($('askPanel')) $('askPanel').hidden = true; S.open = false; }
     async function send(q) {
       q = String(q || '').trim(); if (!q || S.busy) return; $('askIn').value = '';
