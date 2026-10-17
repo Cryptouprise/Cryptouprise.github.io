@@ -2473,7 +2473,8 @@ window.CW_DECKS = [
     const KEY = 'doorboss.call.v1';
     const DOCS = ['Loan / finance agreement', 'Latest loan statement', 'Installation agreement', 'Sales messages / screenshots', 'Signed authorization'];
     const DSTATE = ['Needed', 'Asked', 'Received'];
-    const STAGES = CT.stages, RULES = CT.rules, GROUPS = CT.groups || {}, EMPATHY = CT.empathy || [];
+    // v30: a rule marked confirm:true (cost, how long, anything Charles has not signed off) is NOT live: no chip, no match, no coach line, until the flag is removed in call-content.js
+    const STAGES = CT.stages, RULES = (CT.rules || []).filter(r => !r.confirm), GROUPS = CT.groups || {}, EMPATHY = CT.empathy || [];
     const OUTCOMES = { docs: 'interested', booked: 'appointment', callback: 'callback', no: 'not_interested' };
     let C = null, root = null, tick = null, mq = null, savedT = null;
     const hooks = { afterRender: [], onClose: [] };   // extension points (the presentation engine uses them)
@@ -2609,7 +2610,7 @@ window.CW_DECKS = [
       const fmt = t => { try { return fmtDT(t); } catch (e) { return ''; } };
       const doneDocs = C.docs.filter(v => v === 2).length, name = first(p) === 'there' ? 'Homeowner' : first(p);
       const phone = p.owner_phone ? String(p.owner_phone).replace(/[^\d+]/g, '') : '';
-      const hadSay = keepSay && document.getElementById('cwSay'), sayVal = hadSay ? hadSay.value : '';
+      const prevSay = document.getElementById('cwSay'), sayVal = prevSay ? prevSay.value : '';   // v30: whatever the manager was typing survives any re-render (a consent tap, a stage change, a rotate)
       const chip = r => '<button type="button" data-cw="chip" data-id="' + esc(r.id) + '" title="' + esc(fill(r.say, p)) + '" class="' + (C.active === r.id ? 'on' : '') + '">' + esc(r.chip) + '</button>';   // hover shows what the coach would say
       root.querySelector('.cw-top').innerHTML =
         '<div class="cw-who"><div class="cw-name">' + esc(name) + '</div><div class="cw-sub">' + esc(p.address) + (p.city ? ' · ' + esc(p.city) : '') + '</div></div>' +
@@ -2646,7 +2647,7 @@ window.CW_DECKS = [
         '<div class="cw-card"><div class="row between"><h3 style="margin:0">Your notes</h3><span class="cw-priv" id="cwSaved"></span></div><textarea class="cw-notes" id="cwNotes" placeholder="Jot down anything important: what they are feeling, specific numbers, who they need to talk to…" style="margin-top:8px">' + esc(C.notes) + '</textarea></div>';
       const c3 = root.querySelector('.cw-c3'); c3.className = 'cw-col cw-c3' + (nar ? ' cw-empty' : ''); c3.innerHTML = nar ? '' : coachHtml(p);
       root.querySelector('.cw-bar').innerHTML = '<button type="button" class="btn" data-cw="out" data-k="docs">📄 Docs requested</button><button type="button" class="btn primary" data-cw="out" data-k="booked">📅 Booked review</button><button type="button" class="btn" data-cw="out" data-k="callback">🔁 Call back</button><button type="button" class="btn danger" data-cw="out" data-k="no">Not interested</button>';
-      if (keepSay) { const s = document.getElementById('cwSay'); if (s) { s.value = sayVal; s.focus(); updateSug(sayVal); } }
+      { const s = document.getElementById('cwSay'); if (s) { if (sayVal) { s.value = sayVal; updateSug(sayVal); } if (keepSay) s.focus(); } }
       if (C.anim && nar) { const el = root.querySelector('.cw-coachwrap'); if (el && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
       C.anim = false;
       for (const f of hooks.afterRender) { try { f(root, api); } catch (e) { console.warn('call hook', e); } }
@@ -2714,7 +2715,7 @@ window.CW_DECKS = [
       const p = byId(A.props, id); if (!p) return; injectCss(); if (typeof closeSheet === 'function') closeSheet();
       const saved = loadSaved(id) || {};
       C = { id, live: false, startedAt: null, seed: Math.floor(Math.random() * 1000), stage: 0, qi: STAGES.map(() => 0), active: null, heard: '', noMatch: false, anim: false, allOpen: false, fired: [], unmatched: [], fb: {}, consent: Object.assign({ rec: false, text: false, docs: false }, saved.consent || {}),
-        docs: Array.isArray(saved.docs) && saved.docs.length === DOCS.length ? saved.docs.slice() : DOCS.map(() => 0), they: Object.assign({ promised: '', actual: '', lender: '' }, saved.they || {}), notes: saved.notes || '' };
+        docs: Array.isArray(saved.docs) && saved.docs.length === DOCS.length ? saved.docs.map(x => Math.max(0, Math.min(DSTATE.length - 1, parseInt(x, 10) || 0))) : DOCS.map(() => 0), /* v30: stored values are forced to a valid state index, never trusted as text */ they: Object.assign({ promised: '', actual: '', lender: '' }, saved.they || {}), notes: saved.notes || '' };
       if (root) root.remove();
       root = document.createElement('div'); root.className = 'cw'; root.id = 'cwRoot';
       root.innerHTML = '<div class="cw-top"></div><div class="cw-main"><div class="cw-col cw-c1"></div><div class="cw-col cw-c2"></div><div class="cw-col cw-c3"></div></div><div class="cw-bar"></div>';
@@ -2722,7 +2723,7 @@ window.CW_DECKS = [
       root.addEventListener('click', onClick); root.addEventListener('input', onInput); root.addEventListener('keydown', onSayKey); root.addEventListener('toggle', e => { if (e.target.classList && e.target.classList.contains('cw-all') && C) C.allOpen = e.target.open; }, true);
       document.addEventListener('keydown', onKey);
       try { mq = window.matchMedia('(max-width:1000px)'); mq.addEventListener ? mq.addEventListener('change', onResize) : mq.addListener(onResize); } catch (e) {}
-      render(); clearInterval(tick); tick = setInterval(() => { const t = document.getElementById('cwTimer'); if (t && C && C.live) { t.textContent = clock(); const s = secs(); t.className = s >= 1200 ? 'red' : s >= 900 ? 'amber' : ''; } }, 1000);
+      render(); clearInterval(tick); tick = setInterval(() => { const t = document.getElementById('cwTimer'); if (t && C && C.live) { const s = secs(); t.textContent = (s >= 1200 ? '⚠ over 20 min · ' : s >= 900 ? '⚠ 15 min · ' : '') + clock(); t.className = s >= 1200 ? 'red' : s >= 900 ? 'amber' : ''; } /* v30: the warning is words too, not only a colour */ }, 1000);
     }
     function close() {
       clearTimeout(persistT); if (C) persist();   // flush what was being typed
@@ -2907,17 +2908,22 @@ window.CW_DECKS = [
     }
     function ensureCss() { if (document.getElementById('pzCss')) return; const s = document.createElement('style'); s.id = 'pzCss'; s.textContent = PZ_CSS; document.head.appendChild(s); }
     function startPoll() { if (PR.timer) return; PR.timer = setInterval(() => { if (!surfaces().length) { clearInterval(PR.timer); PR.timer = null; return; } if (sig() !== PR.sig) refresh({ keepFocus: true }); }, 500); }
+    const mgrOk = () => { try { return !!(A && A.me && (A.me.role === 'admin' || A.me.role === 'manager')); } catch (e) { return false; } };   // v30: the presentation surfaces are manager-only even when called from the console
     function openHere() {
+      if (!mgrOk()) return;
       if (PR.overlay && PR.overlay.isConnected) return; ensureCss();
       const el = document.createElement('div'); el.className = 'pz-overlay'; el.id = 'pzOverlay'; el.innerHTML = '<button type="button" class="pz-x" data-pa="close">✕ Back to call</button><div class="pz-host" style="min-height:100%"></div>';
       const app = document.getElementById('app') || document.body; app.appendChild(el); app.classList.add('cw-presenting'); PR.overlay = el; wire(el, document); refresh(); startPoll();
     }
     function closeHere() { if (PR.overlay) { PR.overlay.remove(); PR.overlay = null; } const app = document.getElementById('app'); if (app) app.classList.remove('cw-presenting'); updateCard(); }
     function openWin() {
+      if (!mgrOk()) return;
       let w = null; try { w = window.open('', 'doorboss_present', 'width=1100,height=760'); } catch (e) {}
       if (!w) { try { toast('Allow pop-ups to open the share window, or use Show here'); } catch (e) {} return; }
-      const d = w.document; d.title = 'Presentation'; d.body.innerHTML = ''; d.body.style.margin = '0'; if (!d.getElementById('pzCss')) { const s = d.createElement('style'); s.id = 'pzCss'; s.textContent = PZ_CSS; d.head.appendChild(s); }
-      const r = d.createElement('div'); r.id = 'pz-root'; r.style.minHeight = '100vh'; d.body.appendChild(r); PR.win = w; wire(r, d); refresh(); startPoll();
+      try {
+        const d = w.document; d.title = 'Presentation'; d.body.innerHTML = ''; d.body.style.margin = '0'; if (!d.getElementById('pzCss')) { const s = d.createElement('style'); s.id = 'pzCss'; s.textContent = PZ_CSS; d.head.appendChild(s); }
+        const r = d.createElement('div'); r.id = 'pz-root'; r.style.minHeight = '100vh'; d.body.appendChild(r); try { w.opener = null; } catch (e) {} PR.win = w; wire(r, d); refresh(); startPoll();
+      } catch (e) { try { toast('The share window could not be used. Use Show here instead.'); } catch (e2) {} try { w.close(); } catch (e3) {} PR.win = null; }   // v30: a blocked or broken window never throws into the call screen
     }
     function closeWin() { try { if (PR.win && !PR.win.closed) PR.win.close(); } catch (e) {} PR.win = null; }
 
@@ -2967,6 +2973,7 @@ window.CW_DECKS = [
     const LABEL = { installer: 'Installer', installer_status: 'Installer status', financing: 'Financing', lender: 'Lender', loan_amount: 'Loan amount', loan_balance: 'Loan balance', monthly_payment: 'Pays now / month', promised_monthly: 'Told / month', interest_rate: 'Interest rate %', loan_term_years: 'Loan term (years)', system_size_kw: 'System size (kW)', year_installed: 'Year installed', has_battery: 'Has battery', system_working: 'System working', promise_in_writing: 'Promise in writing', contacted_installer: 'Contacted installer', contacted_lender: 'Contacted lender', other_signer: 'Other signer', main_issue: 'Main issue' };
     const MONEY = new Set(['loan_amount', 'loan_balance', 'monthly_payment', 'promised_monthly']);
     const V = { win: null, s: null, msg: '', lastConsent: null, ai: {}, poll: null, armEnd: 0, html: ['', '', ''] };
+    const tok = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
     const str = (x, n) => String(x === null || x === undefined ? '' : x).replace(/[\u0000-\u0008\u000b-\u001f]/g, '').slice(0, n);   // control chars (incl. the card's part separator) never get through; display is escaped anyway
     const post = m => { try { if (V.win && !V.win.closed) V.win.postMessage(m, AI_ORIGIN); } catch (e) {} };
 
@@ -2987,14 +2994,14 @@ window.CW_DECKS = [
     window.addEventListener('message', e => {
       if (!V.win || e.source !== V.win || e.origin !== AI_ORIGIN) return; const m = e.data || {};
       try {
-        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str(window.A && A.me && A.me.name, 40) || 'Rep', consent: V.lastConsent }); }
+        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str(window.A && A.me && A.me.name, 40) || 'Rep', consent: V.lastConsent, token: tok() }); }   // the manager's own sign-in unlocks the call window: nothing to type
         else if (m.type === 'state') { V.s = { status: str(m.status, 12), msg: str(m.msg, 200), link: str(m.link, 400), remote: !!m.remote, txOn: !!m.txOn, aiMsg: str(m.aiMsg, 200), lines: (Array.isArray(m.lines) ? m.lines : []).slice(-8).map(l => ({ who: l && l.who === 'REP' ? 'REP' : 'HOMEOWNER', text: str(l && l.text, 600) })), sugs: (Array.isArray(m.sugs) ? m.sugs : []).filter(s => s && LABEL[s.k]).slice(0, 19).map(s => ({ k: s.k, v: typeof s.v === 'number' || typeof s.v === 'boolean' ? s.v : str(s.v, 120), e: str(s.e, 160) })) }; paint(); }
         else if (m.type === 'apply') { apply(str(m.k, 30), typeof m.v === 'number' || typeof m.v === 'boolean' ? m.v : str(m.v, 120)); paint(); }
         else if (m.type === 'ended') { resetWin('Call ended.'); paint(); }
       } catch (err) { console.warn('call window message', err); }
     });
 
-    const CSS = '.vc-tx{max-height:150px;overflow:auto;background:#f4f6f8;border-radius:8px;padding:8px;font-size:13px;margin-top:6px}.vc-tx div{margin:2px 0}.vc-tx b{color:#46525e}.vc-sug{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border:1px solid #dfe5ea;border-radius:10px;margin-top:6px}.vc-sug small{display:block;color:#5a6773}.vc-msg{margin:6px 0;padding:8px;border-radius:8px;background:#fff4ee;color:#8a3c0f;font-size:13px}.vc-ok{color:#0b7a68;font-weight:700;font-size:13px}';
+    const CSS = '.vc-tx{max-height:150px;overflow:auto;background:#f4f6f8;border-radius:8px;padding:8px;font-size:13px;margin-top:6px}.vc-tx div{margin:2px 0}.vc-tx b{color:#46525e}.vc-sug{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border:1px solid #dfe5ea;border-radius:10px;margin-top:6px}.vc-sug small{display:block;color:#5a6773}.vc-sug .btn{min-height:44px}.vc-msg{margin:6px 0;padding:8px;border-radius:8px;background:#fff4ee;color:#8a3c0f;font-size:13px}.vc-ok{color:#0b7a68;font-weight:700;font-size:13px}';
     function body() {
       const C = CW.api.state(), consent = !!(C && C.consent.rec), s = V.s;
       if (V.win && !V.win.closed) {
