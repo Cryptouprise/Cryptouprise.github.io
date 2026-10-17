@@ -1990,7 +1990,7 @@ $('#tabbar').addEventListener('click', e => { const t=e.target.closest('.tab'); 
    ============================================================ */
 function renderMeView(){
   const [t0,t1]=periodRange('today'); const mine=A.knocks.filter(k=>k.user_id===A.me.id&&k.created_at>=t0&&k.created_at<t1); const m=metrics(mine);
-  const g=A.goals||{daily_knocks:60,daily_contacts:20,daily_appts:2};
+  const g=Object.assign({daily_knocks:60,daily_contacts:20,daily_appts:2}, A.goals||{});   /* v22.4: missing fields fall back, never 'undefined' */
   // streak: consecutive days (skipping Sundays) with >=1 knock
   let streak=0; for (let d=0; d<60; d++){ const ds=startOfDay(now()-d*DAY); if (new Date(ds).getDay()===0) continue; const any=A.knocks.some(k=>k.user_id===A.me.id&&k.created_at>=ds&&k.created_at<ds+DAY); if (any) streak++; else if (d>0) break; }
   const goal=(v,t,l)=>`<div class="tile"><div class="v num">${v}<span class="muted" style="font-size:14px;font-family:var(--font-body)"> / ${t}</span></div><div class="l">${l}</div><div class="bar" style="margin-top:8px"><i style="width:${Math.min(100,Math.round(100*v/t))}%"></i></div></div>`;
@@ -3198,7 +3198,7 @@ window.CW_DECKS = [
   try {
     if (window.__dbPerfLoaded) return; window.__dbPerfLoaded = true;
     const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
-    const P = { metric: 'doors', window: 'today', cohort: false, scope: 'company', board: null, comps: null, feed: null, pace: null, risk: null, usage: null, profile: null, msg: '', busy: {}, timer: null, newOpen: false };
+    const P = { metric: 'doors', window: 'today', cohort: false, scope: 'company', board: null, comps: null, feed: null, pace: null, risk: null, usage: null, profile: null, rec: null, msg: '', busy: {}, timer: null, newOpen: false };
     const admin = () => { try { return !!(A && A.me && A.me.role === 'admin'); } catch (e) { return false; } };
     const hasTeam = () => { try { return !!(A && A.me && A.me.team_id); } catch (e) { return false; } };
     const $ = id => document.getElementById(id);
@@ -3224,16 +3224,27 @@ window.CW_DECKS = [
         (hasTeam() ? chips('scope', [['company', 'Whole company'], ['team', 'My team']], P.scope) : '') +
         '<label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="pfCohort" ' + (P.cohort ? 'checked' : '') + '> my starting class only' + (b && b.cohort ? ' (' + esc(b.cohort_name) + ')' : '') + '</label>' +
         (b && b.total > b.rows.length ? '<div class="pf-dim">Top ' + b.rows.length + ' of ' + b.total + ' reps, plus you.</div>' : '') +
-        (b ? (b.rows.length ? '<div id="pfRows">' + b.rows.map(r => '<div class="pf-row' + (r.me ? ' me' : '') + '"><span class="pf-rank">' + r.rank + '</span><span class="pf-dot" style="background:' + esc(r.color || '#999') + '"></span><span class="pf-name">' + esc(r.name) + (r.me ? ' (you)' : '') + '<div class="pf-bar"><i style="width:' + Math.round(100 * r.n / top) + '%"></i></div></span><span class="pf-n">' + r.n + '</span></div>').join('') + '</div>' : '<div class="pf-dim">Nobody on the board yet for this window.</div>') : '<div class="pf-dim">Loading…</div>') + '</div>';
+        (b ? (b.rows.length ? '<div id="pfRows">' + b.rows.map(r => '<div class="pf-row' + (r.me ? ' me' : '') + '" data-rep="' + esc(r.id || '') + '" data-name="' + esc(r.name) + '"><span class="pf-rank">' + r.rank + '</span><span class="pf-dot" style="background:' + esc(r.color || '#999') + '"></span><span class="pf-name">' + esc(r.name) + (r.me ? ' (you)' : '') + '<div class="pf-bar"><i style="width:' + Math.round(100 * r.n / top) + '%"></i></div></span><span class="pf-n">' + r.n + '</span></div>').join('') + '</div>' : '<div class="pf-dim">Nobody on the board yet for this window.</div>') : '<div class="pf-dim">Loading…</div>') + '</div>';
     }
+    function recordCard() {
+      /* manager only: one rep's record, opened by tapping a leaderboard row (coaching view: same data the rep sees on their own Me tab) */
+      const r = P.rec; if (!r || !mgr()) return ''; const s = r.profile || {};
+      if (r.loading) return '<div class="card stack" id="pfRec"><h3 style="font-size:18px">' + esc(r.name) + '</h3><div class="pf-dim">Loading…</div></div>';
+      return '<div class="card stack" id="pfRec"><h3 style="font-size:18px">' + esc(r.name) + ' <span class="pf-dim">· record</span></h3>' + (r.error ? '<div class="pf-msg">' + esc(r.error) + '</div>' : '') +
+        '<div class="pf-dim">' + esc(s.doors || 0) + ' doors · ' + esc(s.appts || 0) + ' appointments · ' + esc(s.signed || 0) + ' signed · ' + esc(s.days_active || 0) + ' days out · streak ' + esc(s.streak || 0) + ' (best ' + esc(s.longest_streak || 0) + ')' + (s.best_day ? ' · best day ' + esc(s.best_day.n) : '') + '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + (r.badges || []).filter(b => b.earned).map(b => '<span class="pf-badge on" style="border:1px solid #f05a1a;border-radius:14px;padding:4px 8px;font-size:13px;background:#fff4ee;font-weight:700">' + esc(b.label) + '</span>').join('') + ((r.badges || []).some(b => b.earned) ? '' : '<span class="pf-dim">no badges yet</span>') + '</div>' +
+        ((r.next || []).length ? '<div class="pf-dim" style="margin-top:6px">Next: ' + esc(r.next.join(' · ')) + '</div>' : '') + '<button type="button" class="btn sm" data-pf="closerec" style="margin-top:6px">Close</button></div>';
+    }
+    async function openRecord(id, name) { if (!mgr() || !id) return; P.rec = { name: name || '…', loading: true }; paintTeam(); try { P.rec = await call('/perf/badges', { rep_id: id }); } catch (e) { P.rec = { name: name || '?', error: e.message, badges: [], profile: {}, next: [] }; } paintTeam(); }
     function compCard() {
       const cs = (P.comps && P.comps.competitions) || []; const me = mgr();
-      const one = c => '<div style="margin-top:8px"><b>' + esc(c.name) + '</b> <span class="pf-dim">· ' + esc((c.standings && c.standings.length ? '' : '') + (c.active ? 'ends ' + esc(String(c.end).slice(0, 10)) : c.winner ? 'won by ' + esc(c.winner.name) : 'ended')) + ' · ' + esc(({ doors: 'doors', contacts: 'contacts', appts: 'appointments set', sat: 'appointments sat', signed: 'signed' })[c.metric] || c.metric) + (c.prize ? ' · prize: ' + esc(c.prize) : '') + '</span>' +
+      const ML = { doors: 'doors', contacts: 'contacts', appts: 'appointments set', sat: 'appointments sat', signed: 'signed' };
+      const one = c => '<div style="margin-top:8px"><b>' + esc(c.name) + '</b> <span class="pf-dim">· ' + esc(c.active ? 'ends ' + String(c.end).slice(0, 10) : c.winner ? (c.kind === 'milestone' ? (c.winner.name === 'nobody' ? 'nobody got there' : 'reached by ' + c.winner.name) : 'won by ' + c.winner.name) : 'ended') + ' · ' + esc(c.kind === 'milestone' ? 'everyone who hits ' + c.target + ' ' + (ML[c.metric] || c.metric) + ' wins' : ML[c.metric] || c.metric) + (c.team_only ? ' · my team' : '') + (c.prize ? ' · prize: ' + esc(c.prize) : '') + '</span>' +
         (c.my_rank ? '<div class="pf-dim">You are #' + c.my_rank + '</div>' : '') +
-        '<div>' + (c.standings || []).slice(0, 5).map(r => '<div class="pf-row' + (A && A.me && r.id === A.me.id ? ' me' : '') + '"><span class="pf-rank">' + r.rank + '</span><span class="pf-name">' + esc(r.name) + '</span><span class="pf-n">' + r.n + '</span></div>').join('') + '</div>' +
+        '<div>' + (c.standings || []).slice(0, 5).map(r => '<div class="pf-row' + (A && A.me && r.id === A.me.id ? ' me' : '') + '"><span class="pf-rank">' + (c.kind === 'milestone' ? (r.hit ? '✓' : '·') : r.rank) + '</span><span class="pf-name">' + esc(r.name) + '</span><span class="pf-n">' + r.n + (c.kind === 'milestone' ? '<span class="pf-dim"> / ' + esc(c.target) + '</span>' : '') + '</span></div>').join('') + '</div>' +
         (me && c.active ? '<button type="button" class="btn sm" data-pf="end" data-id="' + esc(c.id) + '">End and announce the winner</button>' : '') + '</div>';
       return '<div class="card stack" id="pfComps"><h3 style="font-size:18px">Competitions</h3>' + (cs.length ? cs.slice(0, 4).map(one).join('') : '<div class="pf-dim">No competition running. ' + (me ? 'Start one below: it takes a minute.' : 'Your manager can start one.') + '</div>') +
-        (me ? (P.newOpen ? '<div class="pf-form" id="pfNew"><input id="pfName" maxlength="60" placeholder="Name, e.g. Doors Derby"><select id="pfMetric"><option value="doors">Doors</option><option value="contacts">Contacts</option><option value="appts">Appointments set</option><option value="sat">Appointments sat</option><option value="signed">Signed</option></select><select id="pfDays"><option value="1">1 day</option><option value="3">3 days</option><option value="7" selected>1 week</option><option value="14">2 weeks</option><option value="30">1 month</option></select><input id="pfPrize" maxlength="120" placeholder="Prize (optional), e.g. $100 gift card"><div class="row" style="gap:8px"><button type="button" class="btn primary" data-pf="create">Start competition</button><button type="button" class="btn" data-pf="cancelnew">Cancel</button></div></div>' : '<button type="button" class="btn sm" data-pf="new">+ New competition</button>') : '') + '</div>';
+        (me ? (P.newOpen ? '<div class="pf-form" id="pfNew"><input id="pfName" maxlength="60" placeholder="Name, e.g. Doors Derby"><select id="pfMetric"><option value="doors">Doors</option><option value="contacts">Contacts</option><option value="appts">Appointments set</option><option value="sat">Appointments sat</option><option value="signed">Signed</option></select><select id="pfDays"><option value="1">1 day</option><option value="3">3 days</option><option value="7" selected>1 week</option><option value="14">2 weeks</option><option value="30">1 month</option></select><select id="pfKind"><option value="leaderboard">Top rep wins</option><option value="milestone">Everyone who hits a number wins</option></select><input id="pfTarget" type="number" min="1" inputmode="numeric" placeholder="Target number (milestone only), e.g. 100" hidden>' + (hasTeam() ? '<select id="pfScope"><option value="company">Whole company</option><option value="team">My team only</option></select>' : '') + '<input id="pfPrize" maxlength="120" placeholder="Prize (optional), e.g. $100 gift card"><div class="row" style="gap:8px"><button type="button" class="btn primary" data-pf="create">Start competition</button><button type="button" class="btn" data-pf="cancelnew">Cancel</button></div></div>' : '<button type="button" class="btn sm" data-pf="new">+ New competition</button>') : '') + '</div>';
     }
     function riskCard() {
       if (!mgr()) return ''; const r = P.risk;
@@ -3269,7 +3280,7 @@ window.CW_DECKS = [
       return '<div class="card stack" id="pfFeed"><h3 style="font-size:18px">Team feed</h3>' + (me ? '<div class="row" style="gap:6px"><input class="cw-in" id="pfShout" maxlength="200" placeholder="Shout-out to the team…" style="flex:1;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--line,#cfd6dc);background:transparent;color:inherit"><button type="button" class="btn sm primary" data-pf="shout">Post</button></div>' : '') +
         (P.msg ? '<div class="pf-msg">' + esc(P.msg) + '</div>' : '') + (!f ? '<div class="pf-dim">Loading…</div>' : f.events.length ? f.events.slice(0, 12).map(e => '<div class="pf-ev">' + ({ appointment: '📅 ', signed: '✍️ ', personal_best: '🏅 ', winner: '🏆 ', shout: '📣 ' }[e.kind] || '') + esc(e.text) + '<small>' + esc(String(e.t).replace('T', ' ').slice(0, 16)) + '</small></div>').join('') : '<div class="pf-dim">Quiet so far today. Appointments, signings, personal bests and shout-outs show up here for the whole team.</div>') + '</div>';
     }
-    function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); } host.innerHTML = boardCard() + compCard() + riskCard(); wire(host); }
+    function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); } host.innerHTML = boardCard() + recordCard() + compCard() + riskCard(); wire(host); }
     function paintMe() { const w = $('meWrap'); if (!w) return; injectCss(); let host = $('pfMe'); if (!host) { host = document.createElement('div'); host.id = 'pfMe'; host.className = 'stack'; const stack = w.querySelector('.stack'); if (stack && stack.children.length > 1) stack.insertBefore(host, stack.children[1]); else w.appendChild(host); } host.innerHTML = paceCard() + profileCard() + feedCard() + usageCard(); wire(host); }
     function wire(host) {
       host.querySelectorAll('[data-pf="metric"] button').forEach(b => b.onclick = () => { P.metric = b.dataset.k; loadBoard(); });
@@ -3279,6 +3290,9 @@ window.CW_DECKS = [
       host.querySelectorAll('[data-pf="new"]').forEach(b => b.onclick = () => { P.newOpen = true; paintTeam(); });
       host.querySelectorAll('[data-pf="cancelnew"]').forEach(b => b.onclick = () => { P.newOpen = false; paintTeam(); });
       host.querySelectorAll('[data-pf="create"]').forEach(b => b.onclick = createComp);
+      const kindSel = host.querySelector('#pfKind'); if (kindSel) kindSel.onchange = () => { const t = $('pfTarget'); if (t) t.hidden = kindSel.value !== 'milestone'; };
+      if (mgr()) host.querySelectorAll('#pfRows .pf-row[data-rep]').forEach(r => { r.style.cursor = 'pointer'; r.onclick = () => openRecord(r.dataset.rep, r.dataset.name); });   /* manager: tap a rep on the board to see their record */
+      host.querySelectorAll('[data-pf="closerec"]').forEach(b => b.onclick = () => { P.rec = null; paintTeam(); });
       host.querySelectorAll('[data-pf="end"]').forEach(b => b.onclick = () => endComp(b.dataset.id));
       host.querySelectorAll('[data-pf="shout"]').forEach(b => b.onclick = postShout);
     }
@@ -3291,8 +3305,10 @@ window.CW_DECKS = [
     async function loadFeed() { try { P.feed = await call('/perf/feed', {}); } catch (e) {} paintMe(); }
     async function createComp() {
       const name = ($('pfName') || {}).value || '', metric = ($('pfMetric') || {}).value || 'doors', days = ($('pfDays') || {}).value || '7', prize = ($('pfPrize') || {}).value || '';
+      const kind = ($('pfKind') || {}).value || 'leaderboard', target = Number(($('pfTarget') || {}).value || 0), scope = ($('pfScope') || {}).value || 'company';
       if (name.trim().length < 3) { toast('Give it a name'); return; }
-      try { await call('/perf/compete', { name, metric, days, prize }); P.newOpen = false; toast('Competition started: the team sees it now'); await loadComps(); } catch (e) { toast(String(e.message)); }
+      if (kind === 'milestone' && !(target > 0)) { toast('Give the milestone a target number'); return; }
+      try { await call('/perf/compete', { name, metric, days, prize, kind, target, scope: scope === 'team' ? 'team' : undefined }); P.newOpen = false; toast('Competition started: the team sees it now'); await loadComps(); } catch (e) { toast(String(e.message)); }
     }
     async function endComp(id) { if (!(typeof confirmBox === 'function')) return; confirmBox('End this competition?', 'The current leader is announced as the winner in the team feed.', async () => { try { await call('/perf/compete', { action: 'end', id }); toast('Winner announced'); await loadComps(); await loadFeed(); } catch (e) { toast(String(e.message)); } }, 'End it'); }
     async function postShout() { const i = $('pfShout'); const text = (i && i.value || '').trim(); if (!text) return; try { await call('/perf/shout', { text }); i.value = ''; P.msg = ''; await loadFeed(); } catch (e) { P.msg = String(e.message); paintMe(); } }
