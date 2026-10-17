@@ -1530,7 +1530,7 @@ const atLocal = (days, hour) => { const d=new Date(); d.setDate(d.getDate()+days
 const TERMINAL = new Set(['not_home','not_interested','do_not_knock']);   // v21: these save with ONE tap (Undo for 5 s)
 function setPending(st){ if (A.pendingStatus!==st) A.pendingWhen=null; A.pendingStatus=st; }
 function toastUndo(msg, onUndo){
-  const el=$('#toast'); el.innerHTML = esc(msg)+' <button id="undoBtn" style="margin-left:10px;padding:6px 14px;border-radius:8px;border:0;font-weight:700;background:#fff;color:#12202e">Undo</button>';
+  const el=$('#toast'); el.innerHTML = esc(msg)+' <button id="undoBtn" style="margin-left:10px;padding:10px 18px;min-height:44px;min-width:72px;border-radius:10px;border:0;font-weight:800;font-size:16px;background:#fff;color:#12202e">Undo</button>';
   el.classList.add('show'); el.style.pointerEvents='auto'; clearTimeout(toastT);
   const hide = () => { el.classList.remove('show'); el.style.pointerEvents=''; };
   toastT = setTimeout(hide, 5500);
