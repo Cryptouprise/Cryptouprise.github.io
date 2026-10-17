@@ -3026,5 +3026,70 @@ window.CW_DECKS = [
 })();
 
 </script>
+<script>
+/* DoorBoss ASSISTANT v1 (Charles 10/17): every rep can ask an AI anything about their own leads, callbacks, appointments, numbers and the houses around them.
+   A fifth tab "Ask AI" opens a chat panel. The question goes to the Hermes doorboss-ai service (POST /ask) with the rep's own DoorBoss sign-in token;
+   the service checks the sign-in with the portal, pulls ONLY that rep's data (admins: the team) and asks DeepSeek. Read-only: it never changes, texts or emails anything.
+   Everything shown is plain text (textContent), so nothing typed by a rep or a homeowner can run as code. */
+(function () {
+  try {
+    if (window.__dbAskLoaded) return; window.__dbAskLoaded = true;
+    const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
+    const CHIPS = ['Who do I call back today?', 'What appointments do I have coming up?', 'How are my numbers this week?', 'Best houses to knock near me', 'Which interested homeowners have I not followed up with?'];
+    const S = { open: false, busy: false, turns: [] };
+    const $ = id => document.getElementById(id);
+    const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
+    const pos = () => { try { const AA = (typeof A !== 'undefined') ? A : window.A; /* the app's state is a top-level const, not window.A */ const p = AA && AA.myPos; if (!p) return null; const lat = Array.isArray(p) ? p[0] : p.lat, lng = Array.isArray(p) ? p[1] : p.lng; return (typeof lat === 'number' && typeof lng === 'number') ? { lat, lng } : null; } catch (e) { return null; } };
+    const CSS = '#askPanel{position:fixed;inset:0;z-index:1450;background:var(--bg,#fff);display:flex;flex-direction:column;padding:env(safe-area-inset-top,0) env(safe-area-inset-right,0) env(safe-area-inset-bottom,0) env(safe-area-inset-left,0)}#askPanel[hidden]{display:none!important}' +
+      '.ask-top{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line,#e3e7eb)}.ask-top b{flex:1;font-size:17px}.ask-log{flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px}' +
+      '.ask-q,.ask-a{max-width:88%;padding:10px 12px;border-radius:14px;white-space:pre-wrap;line-height:1.4;font-size:15px;overflow-wrap:anywhere}.ask-q{align-self:flex-end;background:var(--accent,#f05a1a);color:var(--accent-fg,#fff)}.ask-a{align-self:flex-start;background:var(--accent-soft,#fdeee6);color:inherit}.ask-a.err{background:#fff4ee;color:#8a3c0f}' +
+      '.ask-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 14px 8px}.ask-chips button{border:1px solid var(--line,#dfe5ea);background:transparent;color:inherit;border-radius:16px;padding:7px 11px;font-size:13px}' +
+      '.ask-bar{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--line,#e3e7eb)}.ask-bar input{flex:1;min-width:0;font-size:16px;padding:11px 12px;border-radius:12px;border:1px solid var(--line,#cfd6dc);background:transparent;color:inherit}' +
+      '.ask-bar button,.ask-top button{border:0;border-radius:12px;padding:10px 14px;font-weight:700;background:var(--accent,#f05a1a);color:var(--accent-fg,#fff)}.ask-top button{background:transparent;color:inherit;font-size:22px;padding:4px 10px}.ask-note{font-size:12px;opacity:.75;padding:0 14px 6px}';
+    function build() {
+      if ($('askPanel')) return;
+      const st = document.createElement('style'); st.id = 'askCss'; st.textContent = CSS; document.head.appendChild(st);
+      const p = document.createElement('div'); p.id = 'askPanel'; p.hidden = true; p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'Ask the DoorBoss AI');
+      p.innerHTML = '<div class="ask-top"><b>✨ Ask DoorBoss AI</b><button type="button" id="askClose" aria-label="Close">×</button></div><div class="ask-log" id="askLog"></div>' +
+        '<div class="ask-note" id="askNote">Answers come only from your own doors, callbacks and appointments. It never texts or changes anything.</div><div class="ask-chips" id="askChips"></div>' +
+        '<form class="ask-bar" id="askForm"><input id="askIn" maxlength="500" placeholder="Ask about your leads…" autocomplete="off" aria-label="Your question"><button type="submit" id="askGo">Ask</button></form>';
+      document.body.appendChild(p);
+      const chips = $('askChips'); for (const c of CHIPS) { const b = document.createElement('button'); b.type = 'button'; b.textContent = c; b.onclick = () => send(c); chips.appendChild(b); }
+      $('askClose').onclick = close; $('askForm').onsubmit = e => { e.preventDefault(); send($('askIn').value); };
+      document.addEventListener('keydown', e => { if (S.open && e.key === 'Escape') close(); });
+    }
+    function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; $('askLog').appendChild(d); $('askLog').scrollTop = $('askLog').scrollHeight; return d; }
+    function open() { build(); $('askPanel').hidden = false; S.open = true; if (!$('askLog').children.length) line('ask-a', 'Hi! Ask me anything about your doors: who to call back, your appointments, your numbers, or the best houses near you.'); setTimeout(() => { try { $('askIn').focus(); } catch (e) {} }, 50); }
+    function close() { if ($('askPanel')) $('askPanel').hidden = true; S.open = false; }
+    async function send(q) {
+      q = String(q || '').trim(); if (!q || S.busy) return; $('askIn').value = '';
+      line('ask-q', q);
+      if (navigator.onLine === false) { line('ask-a err', 'No signal right now. Your doors still save on the phone; ask again when you have signal.'); return; }
+      const tok = token(); if (!tok) { line('ask-a err', 'Sign out and sign back in to DoorBoss once, then ask again.'); return; }
+      S.busy = true; $('askGo').disabled = true; const wait = line('ask-a', 'Looking through your doors…');
+      try {
+        const p = pos(); const body = { question: q, history: S.turns.slice(-6) }; if (p) { body.lat = p.lat; body.lng = p.lng; }
+        const r = await fetch(AI_BASE + '/ask', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(body), signal: AbortSignal.timeout ? AbortSignal.timeout(60000) : undefined });
+        let j = {}; try { j = await r.json(); } catch (e) {}
+        if (!r.ok) throw new Error(j.error || ('error ' + r.status));
+        wait.textContent = String(j.answer || '').slice(0, 3000) || 'No answer came back, try again.';
+        S.turns.push({ role: 'user', text: q }, { role: 'assistant', text: wait.textContent }); if (S.turns.length > 12) S.turns = S.turns.slice(-12);
+      } catch (e) {
+        wait.className = 'ask-a err'; const m = String((e && e.message) || ''); wait.textContent = /abort|timeout/i.test(m) ? 'That took too long. Try again in a moment.' : /fetch/i.test(m) ? 'Could not reach the assistant. Check your signal and try again.' : m.charAt(0).toUpperCase() + m.slice(1) + '.';
+      }
+      S.busy = false; $('askGo').disabled = false;
+    }
+    function addTab() {
+      const bar = $('tabbar'); if (!bar || $('tabAsk')) return;
+      const b = document.createElement('button'); b.className = 'tab'; b.id = 'tabAsk'; b.type = 'button';
+      b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg>Ask AI';
+      b.onclick = e => { e.stopPropagation(); e.preventDefault(); open(); }; bar.appendChild(b);
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', addTab); else addTab();
+    window.DBAsk = { open, close, send };
+  } catch (err) { console.warn('assistant failed to start (the rest of DoorBoss is unaffected):', err); }
+})();
+
+</script>
 </body>
 </html>
