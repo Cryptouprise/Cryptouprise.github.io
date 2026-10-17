@@ -3188,5 +3188,110 @@ window.CW_DECKS = [
 })();
 
 </script>
+<script>
+/* DoorBoss PERFORMANCE LAYER card set v1 (10/17): what Enzy sells, inside our own app.
+   Team tab (everyone): live LEADERBOARD (metric + window chips, cohort toggle), COMPETITIONS with standings (+ managers: New competition, End), AT RISK (managers: dark 48 h, slumping).
+   Me tab (everyone): PACE (today vs daily goals, on pace / behind, needed per hour), TEAM FEED (appointments, signed, personal bests, winners, shout-outs; managers can post one).
+   Data comes from the Hermes service (/perf/*) with the user's own sign-in; the service reads the portal, so every number is the live truth, never the phone's copy.
+   Plain text everywhere (esc), polls every 60 s while the tab is open. Reps never see manager controls; the service enforces it too. */
+(function () {
+  try {
+    if (window.__dbPerfLoaded) return; window.__dbPerfLoaded = true;
+    const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
+    const P = { metric: 'doors', window: 'today', cohort: false, scope: 'company', board: null, comps: null, feed: null, pace: null, risk: null, usage: null, msg: '', busy: {}, timer: null, newOpen: false };
+    const admin = () => { try { return !!(A && A.me && A.me.role === 'admin'); } catch (e) { return false; } };
+    const hasTeam = () => { try { return !!(A && A.me && A.me.team_id); } catch (e) { return false; } };
+    const $ = id => document.getElementById(id);
+    const mgr = () => { try { return !!(A && A.me && (A.me.role === 'admin' || A.me.role === 'manager')); } catch (e) { return false; } };
+    const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
+    async function call(path, body) {
+      const tok = token(); if (!tok) throw new Error('Sign out and back in to DoorBoss once, then try again.');
+      const r = await fetch(AI_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined });
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      if (!r.ok) throw new Error(j.error || ('error ' + r.status)); return j;
+    }
+    const CSS = '.pf-chips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}.pf-chips button{border:1px solid var(--line,#dfe5ea);background:transparent;color:inherit;border-radius:16px;padding:7px 11px;font-size:13px;min-height:36px}.pf-chips button.on{background:var(--accent,#f05a1a);color:var(--accent-fg,#fff);border-color:transparent}' +
+      '.pf-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line,#eef1f4)}.pf-row:last-child{border-bottom:0}.pf-rank{width:26px;font-weight:800;text-align:center}.pf-dot{width:10px;height:10px;border-radius:50%;flex:none}.pf-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pf-row.me .pf-name{font-weight:800}.pf-n{font-weight:800;font-variant-numeric:tabular-nums}' +
+      '.pf-bar{height:8px;background:var(--line,#eef1f4);border-radius:4px;overflow:hidden;margin-top:4px}.pf-bar i{display:block;height:100%;background:var(--accent,#f05a1a)}.pf-ok{color:#0b7a68;font-weight:700}.pf-bad{color:#b3261e;font-weight:700}.pf-dim{color:#5a6773;font-size:13px}' +
+      '.pf-ev{padding:6px 0;border-bottom:1px solid var(--line,#eef1f4);font-size:14px}.pf-ev:last-child{border-bottom:0}.pf-ev small{display:block;color:#5a6773}.pf-form{display:grid;gap:8px;margin-top:8px}.pf-form input,.pf-form select{font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--line,#cfd6dc);background:transparent;color:inherit;min-width:0}.pf-msg{margin:6px 0;padding:8px;border-radius:8px;background:#fff4ee;color:#8a3c0f;font-size:13px}';
+    function injectCss() { if ($('pfCss')) return; const s = document.createElement('style'); s.id = 'pfCss'; s.textContent = CSS; document.head.appendChild(s); }
+    const chips = (id, opts, cur) => '<div class="pf-chips" data-pf="' + id + '">' + opts.map(([k, l]) => '<button type="button" data-k="' + esc(k) + '" class="' + (k === cur ? 'on' : '') + '">' + esc(l) + '</button>').join('') + '</div>';
+    function boardCard() {
+      const b = P.board; const top = b && b.rows.length ? Math.max(1, b.rows[0].n) : 1;
+      return '<div class="card stack" id="pfBoard"><h3 style="font-size:18px">Leaderboard <span class="pf-dim">live · ' + esc(b ? b.as_of : '…') + '</span></h3>' +
+        chips('metric', [['doors', 'Doors'], ['contacts', 'Contacts'], ['appts', 'Appts set'], ['sat', 'Appts sat'], ['signed', 'Signed']], P.metric) +
+        chips('window', [['today', 'Today'], ['week', 'This week'], ['month', 'This month']], P.window) +
+        (hasTeam() ? chips('scope', [['company', 'Whole company'], ['team', 'My team']], P.scope) : '') +
+        '<label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="pfCohort" ' + (P.cohort ? 'checked' : '') + '> my starting class only' + (b && b.cohort ? ' (' + esc(b.cohort_name) + ')' : '') + '</label>' +
+        (b && b.total > b.rows.length ? '<div class="pf-dim">Top ' + b.rows.length + ' of ' + b.total + ' reps, plus you.</div>' : '') +
+        (b ? (b.rows.length ? '<div id="pfRows">' + b.rows.map(r => '<div class="pf-row' + (r.me ? ' me' : '') + '"><span class="pf-rank">' + r.rank + '</span><span class="pf-dot" style="background:' + esc(r.color || '#999') + '"></span><span class="pf-name">' + esc(r.name) + (r.me ? ' (you)' : '') + '<div class="pf-bar"><i style="width:' + Math.round(100 * r.n / top) + '%"></i></div></span><span class="pf-n">' + r.n + '</span></div>').join('') + '</div>' : '<div class="pf-dim">Nobody on the board yet for this window.</div>') : '<div class="pf-dim">Loading…</div>') + '</div>';
+    }
+    function compCard() {
+      const cs = (P.comps && P.comps.competitions) || []; const me = mgr();
+      const one = c => '<div style="margin-top:8px"><b>' + esc(c.name) + '</b> <span class="pf-dim">· ' + esc((c.standings && c.standings.length ? '' : '') + (c.active ? 'ends ' + esc(String(c.end).slice(0, 10)) : c.winner ? 'won by ' + esc(c.winner.name) : 'ended')) + ' · ' + esc(({ doors: 'doors', contacts: 'contacts', appts: 'appointments set', sat: 'appointments sat', signed: 'signed' })[c.metric] || c.metric) + (c.prize ? ' · prize: ' + esc(c.prize) : '') + '</span>' +
+        (c.my_rank ? '<div class="pf-dim">You are #' + c.my_rank + '</div>' : '') +
+        '<div>' + (c.standings || []).slice(0, 5).map(r => '<div class="pf-row' + (A && A.me && r.id === A.me.id ? ' me' : '') + '"><span class="pf-rank">' + r.rank + '</span><span class="pf-name">' + esc(r.name) + '</span><span class="pf-n">' + r.n + '</span></div>').join('') + '</div>' +
+        (me && c.active ? '<button type="button" class="btn sm" data-pf="end" data-id="' + esc(c.id) + '">End and announce the winner</button>' : '') + '</div>';
+      return '<div class="card stack" id="pfComps"><h3 style="font-size:18px">Competitions</h3>' + (cs.length ? cs.slice(0, 4).map(one).join('') : '<div class="pf-dim">No competition running. ' + (me ? 'Start one below: it takes a minute.' : 'Your manager can start one.') + '</div>') +
+        (me ? (P.newOpen ? '<div class="pf-form" id="pfNew"><input id="pfName" maxlength="60" placeholder="Name, e.g. Doors Derby"><select id="pfMetric"><option value="doors">Doors</option><option value="contacts">Contacts</option><option value="appts">Appointments set</option><option value="sat">Appointments sat</option><option value="signed">Signed</option></select><select id="pfDays"><option value="1">1 day</option><option value="3">3 days</option><option value="7" selected>1 week</option><option value="14">2 weeks</option><option value="30">1 month</option></select><input id="pfPrize" maxlength="120" placeholder="Prize (optional), e.g. $100 gift card"><div class="row" style="gap:8px"><button type="button" class="btn primary" data-pf="create">Start competition</button><button type="button" class="btn" data-pf="cancelnew">Cancel</button></div></div>' : '<button type="button" class="btn sm" data-pf="new">+ New competition</button>') : '') + '</div>';
+    }
+    function riskCard() {
+      if (!mgr()) return ''; const r = P.risk;
+      return '<div class="card stack" id="pfRisk"><h3 style="font-size:18px">Who needs a call today</h3>' + (!r ? '<div class="pf-dim">Loading…</div>' : r.at_risk.length ? r.at_risk.map(x => '<div class="pf-row"><span class="pf-name"><b>' + esc(x.name) + '</b><br><span class="pf-bad">' + esc(x.flags.join(' · ')) + '</span></span><span class="pf-dim">' + x.this_week + ' this wk · usual ' + x.usual_week + '</span></div>').join('') : '<div class="pf-ok">Nobody dark, nobody slumping. ' + r.checked + ' reps checked.</div>') + '</div>';
+    }
+    function usageCard() {
+      /* admin only: what each team used this month and what the plan would bill. Free plan today = every billable line reads $0; turning billing on is a plans.json change on the service, not an app change. */
+      if (!admin()) return ''; const u = P.usage;
+      if (!u) return '<div class="card stack" id="pfUsage"><h3 style="font-size:18px">Usage and billing</h3><div class="pf-dim">Loading…</div></div>';
+      const K = { skip_trace_home: 'homes traced', ai_ask: 'AI answers', ai_extract: 'live-call extractions', video_room: 'video calls', seat: 'seats' };
+      return '<div class="card stack" id="pfUsage"><h3 style="font-size:18px">Usage and billing <span class="pf-dim">· ' + esc(u.month) + ' · plan: ' + esc((u.plans && u.plans.default && u.plans.default.name) || 'Free') + (u.enforce ? ' · limits ON' : ' · limits off') + '</span></h3>' +
+        (u.rows.length ? u.rows.map(r => '<div class="pf-row"><span class="pf-name">' + esc(r.team === 'company' ? 'Company' : 'Team ' + String(r.team).slice(0, 8)) + ' · ' + esc(K[r.kind] || r.kind) + '</span><span class="pf-n">' + esc(r.qty) + '</span><span class="pf-dim" style="width:92px;text-align:right">bill $' + esc(Number(r.billable_usd || 0).toFixed(2)) + '</span></div>').join('') : '<div class="pf-dim">No usage recorded yet this month.</div>') +
+        '<div class="pf-dim">Would bill $' + esc(Number(u.total_billable_usd || 0).toFixed(2)) + ' · our cost $' + esc(Number(u.total_our_cost_usd || 0).toFixed(2)) + '</div></div>';
+    }
+    function paceCard() {
+      const p = P.pace; if (!p) return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace</h3><div class="pf-dim">Loading…</div></div>';
+      const L = { doors: 'Doors', contacts: 'Contacts', appts: 'Appointments' };
+      return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace <span class="pf-dim">· ' + esc(p.hours_left) + ' h left of the ' + esc(p.day) + ' day</span></h3>' + Object.keys(L).map(k => { const x = p.pace[k]; const cls = x.status === 'behind' ? 'pf-bad' : 'pf-ok'; return '<div class="pf-row"><span class="pf-name">' + L[k] + ' <span class="' + cls + '">' + esc(x.status) + '</span>' + (x.need_per_hour ? '<br><span class="pf-dim">need ' + esc(x.need_per_hour) + ' an hour to hit ' + x.goal + '</span>' : '') + '<div class="pf-bar"><i style="width:' + Math.min(100, Math.round(100 * x.done / Math.max(1, x.goal))) + '%"></i></div></span><span class="pf-n">' + x.done + '<span class="pf-dim"> / ' + x.goal + '</span></span></div>'; }).join('') + '</div>';
+    }
+    function feedCard() {
+      const f = P.feed; const me = mgr();
+      return '<div class="card stack" id="pfFeed"><h3 style="font-size:18px">Team feed</h3>' + (me ? '<div class="row" style="gap:6px"><input class="cw-in" id="pfShout" maxlength="200" placeholder="Shout-out to the team…" style="flex:1;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--line,#cfd6dc);background:transparent;color:inherit"><button type="button" class="btn sm primary" data-pf="shout">Post</button></div>' : '') +
+        (P.msg ? '<div class="pf-msg">' + esc(P.msg) + '</div>' : '') + (!f ? '<div class="pf-dim">Loading…</div>' : f.events.length ? f.events.slice(0, 12).map(e => '<div class="pf-ev">' + ({ appointment: '📅 ', signed: '✍️ ', personal_best: '🏅 ', winner: '🏆 ', shout: '📣 ' }[e.kind] || '') + esc(e.text) + '<small>' + esc(String(e.t).replace('T', ' ').slice(0, 16)) + '</small></div>').join('') : '<div class="pf-dim">Quiet so far today. Appointments, signings, personal bests and shout-outs show up here for the whole team.</div>') + '</div>';
+    }
+    function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); } host.innerHTML = boardCard() + compCard() + riskCard(); wire(host); }
+    function paintMe() { const w = $('meWrap'); if (!w) return; injectCss(); let host = $('pfMe'); if (!host) { host = document.createElement('div'); host.id = 'pfMe'; host.className = 'stack'; const stack = w.querySelector('.stack'); if (stack && stack.children.length > 1) stack.insertBefore(host, stack.children[1]); else w.appendChild(host); } host.innerHTML = paceCard() + feedCard() + usageCard(); wire(host); }
+    function wire(host) {
+      host.querySelectorAll('[data-pf="metric"] button').forEach(b => b.onclick = () => { P.metric = b.dataset.k; loadBoard(); });
+      host.querySelectorAll('[data-pf="window"] button').forEach(b => b.onclick = () => { P.window = b.dataset.k; loadBoard(); });
+      host.querySelectorAll('[data-pf="scope"] button').forEach(b => b.onclick = () => { P.scope = b.dataset.k; loadBoard(); });
+      const c = host.querySelector('#pfCohort'); if (c) c.onchange = () => { P.cohort = c.checked; loadBoard(); };
+      host.querySelectorAll('[data-pf="new"]').forEach(b => b.onclick = () => { P.newOpen = true; paintTeam(); });
+      host.querySelectorAll('[data-pf="cancelnew"]').forEach(b => b.onclick = () => { P.newOpen = false; paintTeam(); });
+      host.querySelectorAll('[data-pf="create"]').forEach(b => b.onclick = createComp);
+      host.querySelectorAll('[data-pf="end"]').forEach(b => b.onclick = () => endComp(b.dataset.id));
+      host.querySelectorAll('[data-pf="shout"]').forEach(b => b.onclick = postShout);
+    }
+    async function loadBoard() { try { P.board = await call('/perf/board', { metric: P.metric, window: P.window, cohort: P.cohort, scope: P.scope }); } catch (e) { P.board = { rows: [], as_of: '', error: e.message }; } paintTeam(); }
+    async function loadUsage() { if (!admin()) return; try { P.usage = await call('/billing/usage', {}); } catch (e) { P.usage = { month: '', rows: [], error: e.message }; } paintMe(); }
+    async function loadComps() { try { P.comps = await call('/perf/competitions', {}); } catch (e) {} paintTeam(); }
+    async function loadRisk() { if (!mgr()) return; try { P.risk = await call('/perf/risk', {}); } catch (e) {} paintTeam(); }
+    async function loadPace() { try { P.pace = await call('/perf/pace', { goals: (window.A && A.goals) || {} }); } catch (e) {} paintMe(); }
+    async function loadFeed() { try { P.feed = await call('/perf/feed', {}); } catch (e) {} paintMe(); }
+    async function createComp() {
+      const name = ($('pfName') || {}).value || '', metric = ($('pfMetric') || {}).value || 'doors', days = ($('pfDays') || {}).value || '7', prize = ($('pfPrize') || {}).value || '';
+      if (name.trim().length < 3) { toast('Give it a name'); return; }
+      try { await call('/perf/compete', { name, metric, days, prize }); P.newOpen = false; toast('Competition started: the team sees it now'); await loadComps(); } catch (e) { toast(String(e.message)); }
+    }
+    async function endComp(id) { if (!(typeof confirmBox === 'function')) return; confirmBox('End this competition?', 'The current leader is announced as the winner in the team feed.', async () => { try { await call('/perf/compete', { action: 'end', id }); toast('Winner announced'); await loadComps(); await loadFeed(); } catch (e) { toast(String(e.message)); } }, 'End it'); }
+    async function postShout() { const i = $('pfShout'); const text = (i && i.value || '').trim(); if (!text) return; try { await call('/perf/shout', { text }); i.value = ''; P.msg = ''; await loadFeed(); } catch (e) { P.msg = String(e.message); paintMe(); } }
+    function tick() { if (!$('view-team') || !$('view-me')) return; if (!$('view-team').hidden) { loadBoard(); loadComps(); loadRisk(); } if (!$('view-me').hidden) { loadPace(); loadFeed(); loadUsage(); } }
+    const _team = window.renderTeam; if (typeof _team === 'function') window.renderTeam = function () { const r = _team.apply(this, arguments); try { paintTeam(); if (!P.board) { loadBoard(); loadComps(); loadRisk(); } } catch (e) { console.warn('perf team', e); } return r; };
+    const _me = window.renderMeView; if (typeof _me === 'function') window.renderMeView = function () { const r = _me.apply(this, arguments); try { paintMe(); if (!P.pace) { loadPace(); loadFeed(); loadUsage(); } } catch (e) { console.warn('perf me', e); } return r; };
+    P.timer = setInterval(() => { try { if (document.visibilityState === 'visible') tick(); } catch (e) {} }, 60000);
+    window.DBPerf = { state: P, loadBoard, loadComps, loadFeed, loadPace, loadRisk, loadUsage };
+  } catch (err) { console.warn('performance layer failed to start (the rest of DoorBoss is unaffected):', err); }
+})();
+
+</script>
 </body>
 </html>
