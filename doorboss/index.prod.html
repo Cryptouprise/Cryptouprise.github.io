@@ -420,7 +420,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 </div>
 
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js" integrity="sha384-NElt3Op+9NBMCYaef5HxeJmU4Xeard/Lku8ek6hoPTvYkQPh3zLIrJP7KiRocsxO" crossorigin="anonymous"></script>
 <script>
 /* ============================================================
    CONFIG
@@ -723,6 +723,7 @@ const DB = (() => {
     try {
       let stored = []; try { stored = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){}
       const mine = new Set(queue.map(qid)); for (const q of stored){ const id = qid(q); if (!mine.has(id) && !gone.has(id)){ queue.push(q); mine.add(id); } }
+      for (const q of queue){ if (q.type==='knock' && q.body && q.body.photos) delete q.body.photos; }   /* v22.2 */
       localStorage.setItem(QKEY, JSON.stringify(queue));
     } catch(e){ try { toast('Phone storage is full: connect and sync now'); } catch(e2){} }
   }
@@ -736,7 +737,8 @@ const DB = (() => {
     const headers = body ? { 'Content-Type':'application/json' } : {};
     let token = null; try { token = localStorage.getItem('doorboss.token'); } catch(e){}
     if (token) headers['Authorization'] = 'Bearer ' + token;          // set when the app runs on a different origin than the API (iframe / separate host)
-    const r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin', signal: (typeof AbortSignal!=='undefined' && AbortSignal.timeout) ? AbortSignal.timeout(ms || 20000) : undefined });
+    const ac = (typeof AbortController!=='undefined') ? new AbortController() : null; const tmr = ac ? setTimeout(() => { try { ac.abort(); } catch(e){} }, ms || 20000) : null;   /* v22.2: works on old webviews too */
+    let r; try { r = await fetch(BASE + path, { method, headers, body: body ? JSON.stringify(body) : undefined, credentials:'same-origin', signal: ac ? ac.signal : undefined }); } finally { if (tmr) clearTimeout(tmr); }
     if (!r.ok){ let msg = r.statusText; try { msg = (await r.json()).error || msg; } catch(e){} throw new Error(`${method} ${path}: ${r.status} ${msg}`); }
     return r.status===204 ? null : r.json();
   }
@@ -855,10 +857,11 @@ const DB = (() => {
           const res = await api('POST','/knocks', knocks);      // idempotent on client_id
           for (const r of (res||[])){ const k = cache.knocks.find(x => x.client_id===r.client_id); if (k){ k.id=r.id; k.synced_at=ts(r.synced_at)||Date.now(); } }
           // v22: drop only what the server confirmed. If it answered with a list that misses some knocks, keep those for a retry; after 3 tries park them on the phone and say so.
-          const acked = Array.isArray(res) ? new Set(res.map(r => r && r.client_id)) : null;
-          const sent = new Set(knocks.filter(k => !acked || acked.has(k.client_id)).map(k => k.client_id)); const lost = [];
-          for (const k of knocks){ if (sent.has(k.client_id)) continue; const q = queue.find(x => x.type==='knock' && x.body.client_id===k.client_id); if (!q) continue; q.tries = (q.tries||0) + 1; if (q.tries >= 3){ sent.add(k.client_id); lost.push(q.body); } }
-          if (lost.length){ try { const u = JSON.parse(localStorage.getItem('doorboss.unacked.v1') || '[]'); localStorage.setItem('doorboss.unacked.v1', JSON.stringify(u.concat(lost))); } catch(e){} try { toast(lost.length+' knock'+(lost.length===1?'':'s')+' the server did not confirm are saved on this phone: tell your manager'); } catch(e){} }
+          if (!Array.isArray(res)) throw new Error('knocks: the server did not answer with a list');   /* v22.2: an odd reply (object, null, HTML) never marks anything as sent */
+          const acked = new Set(res.map(r => r && r.client_id));
+          const sent = new Set(knocks.filter(k => acked.has(k.client_id)).map(k => k.client_id)); let newlyStuck = 0;
+          for (const k of knocks){ if (sent.has(k.client_id)) continue; const q = queue.find(x => x.type==='knock' && x.body.client_id===k.client_id); if (!q) continue; q.tries = (q.tries||0) + 1; if (q.tries === 3) newlyStuck++; }   /* never dropped, never parked: it stays in the queue and goes with the next flush */
+          if (newlyStuck && !A.__stuckWarned){ A.__stuckWarned = true; try { toast('The server keeps leaving out ' + newlyStuck + ' knock' + (newlyStuck===1?'':'s') + '. They stay on this phone and keep retrying: tell your manager'); } catch(e){} }
           sent.forEach(id => gone.add('k:'+id)); queue = queue.filter(q => !(q.type==='knock' && sent.has(q.body.client_id))); n += sent.size; saveQueue(); lastSentAt = Date.now();
         }
         for (const q of queue.filter(q => q.type==='message')){ await api('POST','/messages', q.body); gone.add(qid(q)); queue = queue.filter(x => x!==q); n++; saveQueue(); }
@@ -1203,7 +1206,7 @@ function renderPins(){
 /* house number beside the pin once the rep is at street level — the basemap does not draw them */
 function labelPin(m, p, z){
   const want = z >= 18 && A.map.getBounds().pad(0.3).contains([p.lat,p.lng]);
-  if (want && !m.getTooltip()){ const num = String(p.address||'').trim().split(/\s+/)[0]; if (/^\d/.test(num)) m.bindTooltip(num, { permanent:true, direction:'right', offset:[6,0], className:'pin-label', interactive:false }); }
+  if (want && !m.getTooltip()){ const num = String(p.address||'').trim().split(/\s+/)[0]; if (/^\d/.test(num)) m.bindTooltip(esc(num), { permanent:true, direction:'right', offset:[6,0], className:'pin-label', interactive:false }); }
   else if (!want && m.getTooltip()) m.unbindTooltip();
 }
 function renderTerritories(){
@@ -1756,8 +1759,8 @@ function insights(perRep, team, period){
   for (const t of A.terrs){
     const ps=A.props.filter(p=>p.territory_id===t.id || pointInPoly([p.lat,p.lng], t.polygon||[])); if (!ps.length) continue;
     const covered=ps.filter(p=>p.status!=='unknocked').length; const left=ps.filter(isKnockable).length;
-    if (covered/ps.length>0.85 && left<10) out.push({ k:'info', ic:'▦', t:`${t.name} is ${pct(covered,ps.length)} covered`, s:`${left} knockable doors left. Draw the next territory or import the next list.` });
-    if (!(t.assigned_user_ids||[]).length && left>20) out.push({ k:'warn', ic:'▦', t:`${t.name} has nobody assigned`, s:`${left} knockable doors sitting idle.` });
+    if (covered/ps.length>0.85 && left<10) out.push({ k:'info', ic:'▦', t:`${esc(t.name)} is ${pct(covered,ps.length)} covered`, s:`${left} knockable doors left. Draw the next territory or import the next list.` });
+    if (!(t.assigned_user_ids||[]).length && left>20) out.push({ k:'warn', ic:'▦', t:`${esc(t.name)} has nobody assigned`, s:`${left} knockable doors sitting idle.` });
   }
   const stale = A.positions.filter(p=>p.user_id!==A.me.id && now()-p.updated_at>CONFIG.staleRepMs && now()-p.updated_at<4*3600000);
   if (stale.length && period==='today') out.push({ k:'warn', ic:'◉', t:`${stale.map(p=>userName(p.user_id)).join(', ')} offline ${fmtRel(stale[0].updated_at)}`, s:'Last position older than 3 minutes during field hours.' });
