@@ -3377,5 +3377,65 @@ window.CW_DECKS = [
 })();
 
 </script>
+<script>
+/* DoorBoss EXPORT GUARD v1 (10/18, Charles: "make DoorBoss downloads owner-only and log every download").
+   Team -> Data: the Knocks CSV / Properties CSV buttons show for the owner (role admin) only; managers see a one-line note instead.
+   Every download is recorded by the Hermes service FIRST (/audit/export: who, when, which file, how many rows); if the record cannot be written, the file is not made.
+   The owner sees the last 10 downloads under the buttons. The service refuses (and records) a non-owner attempt even from the browser console. Plain text everywhere. */
+(function () {
+  try {
+    if (window.__dbExportsLoaded) return; window.__dbExportsLoaded = true;
+    const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
+    const owner = () => { try { return !!(A && A.me && A.me.role === 'admin'); } catch (e) { return false; } };
+    const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
+    async function call(path, body) {
+      const tok = token(); if (!tok) throw new Error('sign out and back in to DoorBoss once');
+      const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null; const tmr = ac ? setTimeout(() => { try { ac.abort(); } catch (e) {} }, 20000) : null;
+      let r; try { r = await fetch(AI_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(body || {}), signal: ac ? ac.signal : undefined }); } finally { if (tmr) clearTimeout(tmr); }
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      if (!r.ok) throw new Error(j.error || ('error ' + r.status)); return j;
+    }
+    const _render = window.renderData, _export = window.exportCsv;
+    if (typeof _render !== 'function' || typeof _export !== 'function') return;
+    const CARD = '<div class="card stack"><h3 style="font-size:18px">Export</h3><div class="row" style="gap:8px;flex-wrap:wrap"><button class="btn" data-act="exportKnocks">Knocks CSV</button><button class="btn" data-act="exportProps">Properties CSV</button></div></div>';
+    const BTNS = /<button[^>]*data-act="export(Knocks|Props)"[^>]*>[^<]*<\/button>/g;
+    const NOTE = '<div class="card stack"><h3 style="font-size:18px">Export</h3><div class="muted" style="font-size:13px">Downloads are for the owner only.</div></div>';
+    const R = { items: null, err: '', busy: false };
+    const when = t => { try { return new Date(t).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (e) { return String(t || ''); } };
+    function logHtml() {
+      if (R.err) return 'Recent downloads: could not load (' + esc(R.err) + ').';
+      if (!R.items) return 'Recent downloads: loading...';
+      if (!R.items.length) return 'Recent downloads: none yet. Every download is recorded here.';
+      return '<div style="font-weight:700;margin-bottom:4px">Recent downloads (every one is recorded)</div>' + R.items.slice(0, 10).map(x => '<div>' + esc(when(x.t)) + ' &middot; ' + esc(x.rep || 'someone') + ' &middot; ' + esc(x.file || '') + ' &middot; ' + esc(String(x.rows == null ? '?' : x.rows)) + ' rows' + (x.refused ? ' &middot; <b>refused (not the owner)</b>' : '') + '</div>').join('');
+    }
+    async function loadRecent() {
+      if (R.busy) return; R.busy = true;
+      try { const j = await call('/audit/exports', {}); R.items = Array.isArray(j.items) ? j.items : []; R.err = ''; }
+      catch (e) { R.err = String((e && e.message) || 'no answer').slice(0, 80); }
+      R.busy = false; const el = document.getElementById('dbExpLog'); if (el) el.innerHTML = logHtml();
+    }
+    window.renderData = function () {
+      const html = _render.apply(this, arguments);
+      if (!owner()) return html.indexOf(CARD) >= 0 ? html.replace(CARD, NOTE) : html.replace(BTNS, '');
+      if (!R.items && !R.err) loadRecent();
+      const box = '<div id="dbExpLog" class="muted" style="font-size:12px;line-height:1.5">' + logHtml() + '</div>';
+      return html.indexOf(CARD) >= 0 ? html.replace(CARD, CARD.replace(/<\/div><\/div>$/, '</div>' + box + '</div>')) : html;
+    };
+    window.exportCsv = async function (name, rows) {
+      const file = String(name || 'export.csv').slice(0, 60); const n = Math.max(0, (Array.isArray(rows) ? rows.length : 1) - 1);
+      if (!owner()) {
+        try { await call('/audit/export', { file, rows: n }); } catch (e) {}   /* the service records the refused attempt */
+        toast('Downloads are for the owner only'); return;
+      }
+      try { await call('/audit/export', { file, rows: n }); }
+      catch (e) { toast('Download not started: it could not be recorded (' + String((e && e.message) || 'no answer').slice(0, 60) + ')'); return; }
+      const out = _export.call(this, name, rows);
+      R.items = null; R.err = ''; loadRecent();
+      return out;
+    };
+  } catch (e) { console.warn('export guard', e); }
+})();
+
+</script>
 </body>
 </html>
