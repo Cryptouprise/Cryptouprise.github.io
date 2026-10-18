@@ -2480,7 +2480,7 @@ window.CW_DECKS = [
     const STAGES = CT.stages, RULES = (CT.rules || []).filter(r => !r.confirm), GROUPS = CT.groups || {}, EMPATHY = CT.empathy || [];
     const OUTCOMES = { docs: 'interested', booked: 'appointment', callback: 'callback', no: 'not_interested' };
     let C = null, root = null, tick = null, mq = null, savedT = null;
-    const hooks = { afterRender: [], onClose: [] };   // extension points (the presentation engine uses them)
+    const hooks = { afterRender: [], onClose: [], onFinish: [] };   // extension points (the presentation engine uses afterRender/onClose; the after-call writer uses onFinish)
 
     const prop = () => (C && byId(A.props, C.id)) || null;
     const allowed = () => { try { return !!(A && A.me && (A.me.role === 'admin' || A.me.role === 'manager')); } catch (e) { return false; } };
@@ -2756,7 +2756,10 @@ window.CW_DECKS = [
       else if ((e.key === 'n' || e.key === 'N') && C.active) { C.fb[C.active] = 'skip'; render(); }
     }
     function finish(kind) {
-      const p = prop(); if (!p) return; const note = summary(), st = OUTCOMES[kind], textOk = !!C.consent.text; persist(); const id = p.id; close();
+      const p = prop(); if (!p) return; const note = summary(), st = OUTCOMES[kind], textOk = !!C.consent.text; persist(); const id = p.id;
+      try { const snap = { property_id: id, outcome: st, they: Object.assign({}, C.they), docs: (C.docs || []).slice(), notes: String(C.notes || ''), consent: Object.assign({}, C.consent), summary: note, started_at: C.startedAt || null };
+        for (const f of hooks.onFinish || []) { try { f(snap); } catch (e) { console.warn('onFinish hook', e); } } } catch (e) {}   /* v38: the after-call writer (call-video.js) gets the case file BEFORE the screen closes */
+      close();
       openSheet(id);
       setTimeout(() => {
         try {
@@ -2986,7 +2989,13 @@ window.CW_DECKS = [
       let w = null; try { w = window.open(AI_BASE + '/call?o=' + encodeURIComponent(location.origin), 'doorboss_video', 'width=1180,height=820'); } catch (e) {}
       if (!w) { V.msg = 'The call window was blocked. Allow pop-ups for this site in the browser address bar, then tap Start again.'; paint(); return; }
       V.win = w; V.s = null; V.msg = ''; V.lastConsent = null; clearInterval(V.poll);
-      V.poll = setInterval(() => { if (V.win && V.win.closed) { resetWin('The call window was closed.'); paint(); } }, 1500); paint();
+      V.poll = setInterval(() => {
+        if (V.win && V.win.closed) { resetWin('The call window was closed.'); paint(); return; }
+        try {   /* v38: when the presentation is open in its own window, tell the call window so it offers "Share slides" (the homeowner on video sees the deck) */
+          const pw = CW.present && CW.present.state && CW.present.state.win; const open = !!(pw && !pw.closed);
+          if (open !== !!V.slidesOpen) { V.slidesOpen = open; post({ type: 'slides', open }); paint(); }
+        } catch (e) {}
+      }, 1500); paint();
     }
     function endCall(quiet) { post({ type: 'end' }); try { if (V.win && !V.win.closed) setTimeout(() => { try { V.win && V.win.close(); } catch (e) {} }, 700); } catch (e) {} resetWin(quiet ? '' : 'Call ended.'); if (!quiet) paint(); }
     function apply(k, v) {   // an accepted suggestion goes into the case file (the manager tapped Use); < > are stripped so no markup ever reaches the notes / GHL
@@ -2994,6 +3003,41 @@ window.CW_DECKS = [
       if (map[k]) CW.api.setThey(map[k], String(v));
       else { C.notes = (C.notes ? C.notes + '\n' : '') + 'AI-accepted ' + LABEL[k] + ': ' + v; const ta = document.getElementById('cwNotes'); if (ta) { ta.value = C.notes; ta.dispatchEvent(new Event('input', { bubbles: true })); } }
     }
+    /* v38 AFTER-CALL WRITE-BACK: when the manager logs the outcome, the case file (what they said + every AI fact they accepted + docs + notes) goes to the service /complete,
+       which writes the intake record in the portal and the contract facts on the GHL contact. Best effort: a failure shows a toast and never blocks the outcome. */
+    const WBQ = 'doorboss.writeback.v1';   // case files that could not reach the service (no signal, service down) stay on the phone and are retried when back online / on the next open
+    const qload = () => { try { return JSON.parse(localStorage.getItem(WBQ) || '[]'); } catch (e) { return []; } };
+    const qsave = q => { try { localStorage.setItem(WBQ, JSON.stringify(q.slice(-20))); } catch (e) {} };
+    function toastLater(msg) {   // never over the house card's Undo bar or its own toast (the toast element is shared): wait until it is free, up to 10 s
+      const t0 = Date.now(); const tick = () => { try { const el = document.getElementById('toast'); const busy = document.getElementById('undoBtn') || (el && el.classList.contains('show')); if (busy && Date.now() - t0 < 10000) return setTimeout(tick, 500); toast(msg); } catch (e) {} }; setTimeout(tick, 400);
+    }
+    async function sendBack(body) {
+      const t = tok(); if (!t) { const er = new Error('sign in to DoorBoss again'); er.status = 403; throw er; }
+      const r = await fetch(AI_BASE + '/complete', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + t }, body: JSON.stringify(body), signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined });
+      let j = {}; try { j = await r.json(); } catch (e) {}
+      if (!r.ok) { const er = new Error(j.error || ('error ' + r.status)); er.status = r.status; throw er; }
+      return j;
+    }
+    async function writeBack(snap) {
+      if (!snap) return;
+      const body = { property_id: snap.property_id, outcome: snap.outcome, they: snap.they, ai: Object.assign({}, V.ai), docs: snap.docs, notes: snap.notes, consent: snap.consent, summary: snap.summary, started_at: snap.started_at, rep_name: str(window.A && A.me && A.me.name, 60) };
+      V.ai = {};
+      try {
+        const j = await sendBack(body);
+        toastLater(j.mode === 'live' ? 'Intake record saved' + (j.ghl && j.ghl.updated ? ' and GHL updated' : '') : 'Intake record prepared (dry run)');
+      } catch (e) {
+        if (e && (e.status === 400 || e.status === 403 || e.status === 404)) { toastLater('The intake record was not saved: ' + String(e.message || '').slice(0, 80)); return; }   // a real refusal: say so, do not retry forever
+        const q = qload(); q.push({ body, t: Date.now() }); qsave(q);   // no signal / service down: keep it, retry later, never block the outcome
+        toastLater('Intake record kept on this phone; it goes to the portal when you are back online.');
+      }
+    }
+    async function retryQueue() {
+      let q = qload(); if (!q.length || navigator.onLine === false) return;
+      for (const item of q.slice()) { try { await sendBack(item.body); q = q.filter(x => x !== item); qsave(q); } catch (e) { if (e && (e.status === 400 || e.status === 403 || e.status === 404)) { q = q.filter(x => x !== item); qsave(q); } else break; } }
+    }
+    if (Array.isArray(CW.hooks.onFinish)) CW.hooks.onFinish.push(writeBack);
+    window.addEventListener('online', () => setTimeout(retryQueue, 2000)); setTimeout(retryQueue, 6000);
+    V.retryQueue = retryQueue;
     window.addEventListener('message', e => {
       if (!V.win || e.source !== V.win || e.origin !== AI_ORIGIN) return; const m = e.data || {};
       try {
@@ -3014,6 +3058,7 @@ window.CW_DECKS = [
           (s && s.link ? '<div class="cw-priv" style="margin-top:8px">Homeowner link (you send it; nothing is sent for you)</div><div class="row" style="gap:6px"><input class="cw-in" id="vcLink" readonly value="' + esc(s.link) + '" aria-label="Homeowner link"><button type="button" class="btn sm" data-vc="copy">Copy</button><button type="button" class="btn sm" data-vc="text">Text</button></div>' : '') +
           '<div style="margin-top:8px">' + (consent ? (s && s.txOn ? '<span class="vc-ok">✓ Live transcript on (they agreed to record)</span>' : '<span class="cw-priv">Starting the live transcript…</span>') : '<span class="cw-priv">Tick <b>record</b> above once they say OK. The live transcript and AI start only then.</span>') + '</div>' +
           (s && s.aiMsg ? '<div class="vc-msg">' + esc(s.aiMsg) + '</div>' : '') +
+          (V.slidesOpen && s && s.status === 'live' ? '<div class="vc-ok" style="margin-top:6px">Slides are open in their own window: in the call window tap <b>Share slides</b> and pick that window so the homeowner sees them.</div>' : '') +
           '\u0001' + (s && s.lines.length ? '<div class="vc-tx" id="vcTx">' + s.lines.map(l => '<div><b>' + (l.who === 'REP' ? 'You' : 'Homeowner') + ':</b> ' + esc(l.text) + '</div>').join('') + '</div>' : '') +
           '\u0001' + (s && s.sugs.length ?'<div class="cw-priv" style="margin-top:8px">The AI heard (tap Use to put it in the case file)</div>' + s.sugs.map(x => '<div class="vc-sug"><div><b>' + esc(LABEL[x.k]) + ':</b> ' + esc(MONEY.has(x.k) && typeof x.v === 'number' ? '$' + x.v.toLocaleString('en-US') : String(x.v)) + '<small>they said: "' + esc(x.e) + '"</small></div><div class="row" style="gap:4px"><button type="button" class="btn sm primary" data-vc="use" data-k="' + esc(x.k) + '">Use</button><button type="button" class="btn sm" data-vc="no" data-k="' + esc(x.k) + '">No</button></div></div>').join('') : '');
       }
@@ -3055,7 +3100,7 @@ window.CW_DECKS = [
     });
     CW.hooks.onClose.push(function () { endCall(true); });
     window.addEventListener('pagehide', () => { post({ type: 'end' }); });
-    CW.video = { state: V, start, endCall, AI_ORIGIN };
+    CW.video = { state: V, start, endCall, AI_ORIGIN, retryQueue };
   } catch (err) { console.warn('video module failed to start (the rest of the call screen is unaffected):', err); }
 })();
 
