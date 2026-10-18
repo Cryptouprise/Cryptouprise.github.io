@@ -851,7 +851,8 @@ const DB = (() => {
       flushing = (async () => {
         if (!navigator.onLine || !queue.length) return 0;
         let n = 0;
-        const knocks = queue.filter(q => q.type==='knock' && !held.has(q.body.client_id)).map(q => q.body);
+        const heldHouses = new Set(queue.filter(q => q.type==='knock' && held.has(q.body.client_id)).map(q => q.body.property_id));
+        const knocks = queue.filter(q => q.type==='knock' && !held.has(q.body.client_id) && !heldHouses.has(q.body.property_id)).map(q => q.body);
         for (const k of knocks){ if (k.photos) delete k.photos; }   // no upload route on the server yet; photos stay off until it exists
         if (knocks.length){
           const res = await api('POST','/knocks', knocks);      // idempotent on client_id
@@ -1430,6 +1431,7 @@ document.addEventListener('keydown', e => { if (e.key==='Escape' && A.sheetProp)
 /* swipe the handle down to close (iOS taps on the dim area were unreliable) */
 (() => { const h=$('#sheet .handle'); let y0=null; h.addEventListener('touchstart', e => { y0=e.touches[0].clientY; }, { passive:true }); h.addEventListener('touchend', e => { if (y0!=null && e.changedTouches[0].clientY - y0 > 30) closeSheet(); y0=null; }, { passive:true }); h.addEventListener('click', closeSheet); })();
 function renderSheet(){
+  if (!A.sheetProp) return;
   const p=A.sheetProp; const hist=A.knocks.filter(k=>k.property_id===p.id).sort((a,b)=>b.created_at-a.created_at);
   const tier=TIERS[p.tier]||TIERS.none; const dist = A.myPos ? haversine(A.myPos,[p.lat,p.lng]) : null;
   const nav = `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}`;
@@ -1493,6 +1495,7 @@ function renderSheet(){
   $('#sheetClose').onclick = closeSheet;
   $$('[data-copy]',el).forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{
+    if (!A.sheetProp || A.sheetProp.id !== p.id) return;
     const cur=apptOf(p);
     if (b.dataset.st==='appointment' && isOpenAp(cur) && !cur.pending){ const w=$('#apWhen'); if (w){ w.hidden=false; $('#apResult').hidden=true; $('#apWhenInput').value=toLocalInput(cur.at); w.scrollIntoView({ behavior:'smooth', block:'center' }); } toast('Already booked · pick a new time to reschedule'); return; }
     if (TERMINAL.has(b.dataset.st)){ A.pendingStatus=b.dataset.st; saveKnock({ quick:true }); return; }
@@ -3329,7 +3332,7 @@ window.CW_DECKS = [
     function paceCard() {
       const p = P.pace; if (!p || p.error) return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace</h3>' + (p && p.error ? errLine(p) : '<div class="pf-dim">Loading…</div>') + '</div>';
       const L = { doors: 'Doors', contacts: 'Contacts', appts: 'Appointments' };
-      return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace <span class="pf-dim">· ' + esc(p.hours_left) + ' h left of the ' + esc(p.day) + ' day</span></h3>' + Object.keys(L).map(k => { const x = p.pace[k]; const cls = x.status === 'behind' ? 'pf-bad' : 'pf-ok'; return '<div class="pf-row"><span class="pf-name">' + L[k] + ' <span class="' + cls + '">' + esc(x.status) + '</span>' + (x.need_per_hour ? '<br><span class="pf-dim">need ' + esc(x.need_per_hour) + ' an hour to hit ' + x.goal + '</span>' : '') + '<div class="pf-bar"><i style="width:' + Math.min(100, Math.round(100 * x.done / Math.max(1, x.goal))) + '%"></i></div></span><span class="pf-n">' + x.done + '<span class="pf-dim"> / ' + x.goal + '</span></span></div>'; }).join('') + '</div>';
+      return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace <span class="pf-dim">· ' + esc(p.hours_left) + ' h left of the ' + esc(p.day) + ' day</span></h3>' + Object.keys(L).filter(k => p.pace && p.pace[k]).map(k => { const x = p.pace[k]; const cls = x.status === 'behind' ? 'pf-bad' : 'pf-ok'; return '<div class="pf-row"><span class="pf-name">' + L[k] + ' <span class="' + cls + '">' + esc(x.status) + '</span>' + (x.need_per_hour ? '<br><span class="pf-dim">need ' + esc(x.need_per_hour) + ' an hour to hit ' + x.goal + '</span>' : '') + '<div class="pf-bar"><i style="width:' + Math.min(100, Math.round(100 * x.done / Math.max(1, x.goal))) + '%"></i></div></span><span class="pf-n">' + x.done + '<span class="pf-dim"> / ' + x.goal + '</span></span></div>'; }).join('') + '</div>';
     }
     function feedCard() {
       const f = P.feed; const me = mgr();
