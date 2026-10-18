@@ -3024,7 +3024,8 @@ window.CW_DECKS = [
       V.ai = {};
       try {
         const j = await sendBack(body);
-        toastLater(j.mode === 'live' ? 'Intake record saved' + (j.ghl && j.ghl.updated ? ' and GHL updated' : '') : 'Intake record prepared (dry run)');
+        const g = j.ghl || {};   // QA 10/17: a GHL step that did not write is said out loud, never hidden behind "saved"
+        toastLater(j.mode === 'live' ? 'Intake record saved' + (g.updated ? ' and GHL updated' : (g.reason ? '. GHL not updated: ' + String(g.reason).slice(0, 70) : '')) : 'Intake record prepared (dry run)');
       } catch (e) {
         if (e && (e.status === 400 || e.status === 403 || e.status === 404)) { toastLater('The intake record was not saved: ' + String(e.message || '').slice(0, 80)); return; }   // a real refusal: say so, do not retry forever
         const q = qload(); q.push({ body, t: Date.now() }); qsave(q);   // no signal / service down: keep it, retry later, never block the outcome
@@ -3258,10 +3259,13 @@ window.CW_DECKS = [
     const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
     async function call(path, body) {
       const tok = token(); if (!tok) throw new Error('Sign out and back in to DoorBoss once, then try again.');
-      const r = await fetch(AI_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(body || {}), signal: AbortSignal.timeout ? AbortSignal.timeout(30000) : undefined });
+      const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null; const tmr = ac ? setTimeout(() => { try { ac.abort(); } catch (e) {} }, 30000) : null;   /* QA 10/17: a timeout on old webviews too */
+      let r; try { r = await fetch(AI_BASE + path, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(body || {}), signal: ac ? ac.signal : undefined }); } finally { if (tmr) clearTimeout(tmr); }
       let j = {}; try { j = await r.json(); } catch (e) {}
       if (!r.ok) throw new Error(j.error || ('error ' + r.status)); return j;
     }
+    const fail = e => 'Could not load this right now (' + String((e && e.message) || 'no answer').slice(0, 80) + ').';   /* QA 10/17: a failed load says so instead of showing an empty board or "Loading…" forever */
+    const errLine = o => (o && o.error) ? '<div class="pf-msg">' + esc(o.error) + '</div>' : '';
     const CSS = '.pf-chips{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0}.pf-chips button{border:1px solid var(--line,#dfe5ea);background:transparent;color:inherit;border-radius:16px;padding:7px 11px;font-size:13px;min-height:36px}.pf-chips button.on{background:var(--accent,#f05a1a);color:var(--accent-fg,#fff);border-color:transparent}' +
       '.pf-row{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line,#eef1f4)}.pf-row:last-child{border-bottom:0}.pf-rank{width:26px;font-weight:800;text-align:center}.pf-dot{width:10px;height:10px;border-radius:50%;flex:none}.pf-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pf-row.me .pf-name{font-weight:800}.pf-n{font-weight:800;font-variant-numeric:tabular-nums}' +
       '.pf-bar{height:8px;background:var(--line,#eef1f4);border-radius:4px;overflow:hidden;margin-top:4px}.pf-bar i{display:block;height:100%;background:var(--accent,#f05a1a)}.pf-ok{color:#0b7a68;font-weight:700}.pf-bad{color:#b3261e;font-weight:700}.pf-dim{color:#5a6773;font-size:13px}' +
@@ -3276,7 +3280,7 @@ window.CW_DECKS = [
         (hasTeam() ? chips('scope', [['company', 'Whole company'], ['team', 'My team']], P.scope) : '') +
         '<label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="pfCohort" ' + (P.cohort ? 'checked' : '') + '> my starting class only' + (b && b.cohort ? ' (' + esc(b.cohort_name) + ')' : '') + '</label>' +
         (b && b.total > b.rows.length ? '<div class="pf-dim">Top ' + b.rows.length + ' of ' + b.total + ' reps, plus you.</div>' : '') +
-        (b ? (b.rows.length ? '<div id="pfRows">' + b.rows.map(r => '<div class="pf-row' + (r.me ? ' me' : '') + '" data-rep="' + esc(r.id || '') + '" data-name="' + esc(r.name) + '"><span class="pf-rank">' + r.rank + '</span><span class="pf-dot" style="background:' + esc(r.color || '#999') + '"></span><span class="pf-name">' + esc(r.name) + (r.me ? ' (you)' : '') + '<div class="pf-bar"><i style="width:' + Math.round(100 * r.n / top) + '%"></i></div></span><span class="pf-n">' + r.n + '</span></div>').join('') + '</div>' : '<div class="pf-dim">Nobody on the board yet for this window.</div>') : '<div class="pf-dim">Loading…</div>') + '</div>';
+        errLine(b) + (b ? (b.rows.length ? '<div id="pfRows">' + b.rows.map(r => '<div class="pf-row' + (r.me ? ' me' : '') + '" data-rep="' + esc(r.id || '') + '" data-name="' + esc(r.name) + '"><span class="pf-rank">' + r.rank + '</span><span class="pf-dot" style="background:' + esc(r.color || '#999') + '"></span><span class="pf-name">' + esc(r.name) + (r.me ? ' (you)' : '') + '<div class="pf-bar"><i style="width:' + Math.round(100 * r.n / top) + '%"></i></div></span><span class="pf-n">' + r.n + '</span></div>').join('') + '</div>' : b.error ? '' : '<div class="pf-dim">Nobody on the board yet for this window.</div>') : '<div class="pf-dim">Loading…</div>') + '</div>';
     }
     function recordCard() {
       /* manager only: one rep's record, opened by tapping a leaderboard row (coaching view: same data the rep sees on their own Me tab) */
@@ -3287,7 +3291,7 @@ window.CW_DECKS = [
         '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px">' + (r.badges || []).filter(b => b.earned).map(b => '<span class="pf-badge on" style="border:1px solid #f05a1a;border-radius:14px;padding:4px 8px;font-size:13px;background:#fff4ee;font-weight:700">' + esc(b.label) + '</span>').join('') + ((r.badges || []).some(b => b.earned) ? '' : '<span class="pf-dim">no badges yet</span>') + '</div>' +
         ((r.next || []).length ? '<div class="pf-dim" style="margin-top:6px">Next: ' + esc(r.next.join(' · ')) + '</div>' : '') + '<button type="button" class="btn sm" data-pf="closerec" style="margin-top:6px">Close</button></div>';
     }
-    async function openRecord(id, name) { if (!mgr() || !id) return; P.rec = { name: name || '…', loading: true }; paintTeam(); try { P.rec = await call('/perf/badges', { rep_id: id }); } catch (e) { P.rec = { name: name || '?', error: e.message, badges: [], profile: {}, next: [] }; } paintTeam(); }
+    async function openRecord(id, name) { if (!mgr() || !id) return; const seq = (P.recSeq = (P.recSeq || 0) + 1); P.rec = { name: name || '…', loading: true }; paintTeam(); let rec; try { rec = await call('/perf/badges', { rep_id: id }); } catch (e) { rec = { name: name || '?', error: fail(e), badges: [], profile: {}, next: [] }; } if (seq !== P.recSeq) return; /* a later tap won */ P.rec = rec; paintTeam(); }
     function compCard() {
       const cs = (P.comps && P.comps.competitions) || []; const me = mgr();
       const ML = { doors: 'doors', contacts: 'contacts', appts: 'appointments set', sat: 'appointments sat', signed: 'signed' };
@@ -3295,12 +3299,12 @@ window.CW_DECKS = [
         (c.my_rank ? '<div class="pf-dim">You are #' + c.my_rank + '</div>' : '') +
         '<div>' + (c.standings || []).slice(0, 5).map(r => '<div class="pf-row' + (A && A.me && r.id === A.me.id ? ' me' : '') + '"><span class="pf-rank">' + (c.kind === 'milestone' ? (r.hit ? '✓' : '·') : r.rank) + '</span><span class="pf-name">' + esc(r.name) + '</span><span class="pf-n">' + r.n + (c.kind === 'milestone' ? '<span class="pf-dim"> / ' + esc(c.target) + '</span>' : '') + '</span></div>').join('') + '</div>' +
         (me && c.active ? '<button type="button" class="btn sm" data-pf="end" data-id="' + esc(c.id) + '">End and announce the winner</button>' : '') + '</div>';
-      return '<div class="card stack" id="pfComps"><h3 style="font-size:18px">Competitions</h3>' + (cs.length ? cs.slice(0, 4).map(one).join('') : '<div class="pf-dim">No competition running. ' + (me ? 'Start one below: it takes a minute.' : 'Your manager can start one.') + '</div>') +
+      return '<div class="card stack" id="pfComps"><h3 style="font-size:18px">Competitions</h3>' + errLine(P.comps) + (cs.length ? cs.slice(0, 4).map(one).join('') : P.comps && P.comps.error ? '' : '<div class="pf-dim">No competition running. ' + (me ? 'Start one below: it takes a minute.' : 'Your manager can start one.') + '</div>') +
         (me ? (P.newOpen ? '<div class="pf-form" id="pfNew"><input id="pfName" maxlength="60" placeholder="Name, e.g. Doors Derby"><select id="pfMetric"><option value="doors">Doors</option><option value="contacts">Contacts</option><option value="appts">Appointments set</option><option value="sat">Appointments sat</option><option value="signed">Signed</option></select><select id="pfDays"><option value="1">1 day</option><option value="3">3 days</option><option value="7" selected>1 week</option><option value="14">2 weeks</option><option value="30">1 month</option></select><select id="pfKind"><option value="leaderboard">Top rep wins</option><option value="milestone">Everyone who hits a number wins</option></select><input id="pfTarget" type="number" min="1" inputmode="numeric" placeholder="Target number (milestone only), e.g. 100" hidden>' + (hasTeam() ? '<select id="pfScope"><option value="company">Whole company</option><option value="team">My team only</option></select>' : '') + '<input id="pfPrize" maxlength="120" placeholder="Prize (optional), e.g. $100 gift card"><div class="row" style="gap:8px"><button type="button" class="btn primary" data-pf="create">Start competition</button><button type="button" class="btn" data-pf="cancelnew">Cancel</button></div></div>' : '<button type="button" class="btn sm" data-pf="new">+ New competition</button>') : '') + '</div>';
     }
     function riskCard() {
       if (!mgr()) return ''; const r = P.risk;
-      return '<div class="card stack" id="pfRisk"><h3 style="font-size:18px">Who needs a call today</h3>' + (!r ? '<div class="pf-dim">Loading…</div>' : r.at_risk.length ? r.at_risk.map(x => '<div class="pf-row"><span class="pf-name"><b>' + esc(x.name) + '</b><br><span class="pf-bad">' + esc(x.flags.join(' · ')) + '</span></span><span class="pf-dim">' + x.this_week + ' this wk · usual ' + x.usual_week + '</span></div>').join('') : '<div class="pf-ok">Nobody dark, nobody slumping. ' + r.checked + ' reps checked.</div>') + '</div>';
+      return '<div class="card stack" id="pfRisk"><h3 style="font-size:18px">Who needs a call today</h3>' + (!r ? '<div class="pf-dim">Loading…</div>' : r.error ? errLine(r) : r.at_risk.length ? r.at_risk.map(x => '<div class="pf-row"><span class="pf-name"><b>' + esc(x.name) + '</b><br><span class="pf-bad">' + esc(x.flags.join(' · ')) + '</span></span><span class="pf-dim">' + x.this_week + ' this wk · usual ' + x.usual_week + '</span></div>').join('') : '<div class="pf-ok">Nobody dark, nobody slumping. ' + r.checked + ' reps checked.</div>') + '</div>';
     }
     function usageCard() {
       /* admin only: what each team used this month and what the plan would bill. Free plan today = every billable line reads $0; turning billing on is a plans.json change on the service, not an app change. */
@@ -3323,14 +3327,14 @@ window.CW_DECKS = [
         (s.best_week ? '<div class="pf-dim">Best week: ' + esc(s.best_week.n) + ' doors (week of ' + esc(s.best_week.week_of) + ')' + (s.derby_wins ? ' · ' + esc(s.derby_wins) + ' competition win' + (s.derby_wins > 1 ? 's' : '') : '') + '</div>' : '') + '</div>';
     }
     function paceCard() {
-      const p = P.pace; if (!p) return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace</h3><div class="pf-dim">Loading…</div></div>';
+      const p = P.pace; if (!p || p.error) return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace</h3>' + (p && p.error ? errLine(p) : '<div class="pf-dim">Loading…</div>') + '</div>';
       const L = { doors: 'Doors', contacts: 'Contacts', appts: 'Appointments' };
       return '<div class="card stack" id="pfPace"><h3 style="font-size:18px">Pace <span class="pf-dim">· ' + esc(p.hours_left) + ' h left of the ' + esc(p.day) + ' day</span></h3>' + Object.keys(L).map(k => { const x = p.pace[k]; const cls = x.status === 'behind' ? 'pf-bad' : 'pf-ok'; return '<div class="pf-row"><span class="pf-name">' + L[k] + ' <span class="' + cls + '">' + esc(x.status) + '</span>' + (x.need_per_hour ? '<br><span class="pf-dim">need ' + esc(x.need_per_hour) + ' an hour to hit ' + x.goal + '</span>' : '') + '<div class="pf-bar"><i style="width:' + Math.min(100, Math.round(100 * x.done / Math.max(1, x.goal))) + '%"></i></div></span><span class="pf-n">' + x.done + '<span class="pf-dim"> / ' + x.goal + '</span></span></div>'; }).join('') + '</div>';
     }
     function feedCard() {
       const f = P.feed; const me = mgr();
       return '<div class="card stack" id="pfFeed"><h3 style="font-size:18px">Team feed</h3>' + (me ? '<div class="row" style="gap:6px"><input class="cw-in" id="pfShout" maxlength="200" placeholder="Shout-out to the team…" style="flex:1;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--line,#cfd6dc);background:transparent;color:inherit"><button type="button" class="btn sm primary" data-pf="shout">Post</button></div>' : '') +
-        (P.msg ? '<div class="pf-msg">' + esc(P.msg) + '</div>' : '') + (!f ? '<div class="pf-dim">Loading…</div>' : f.events.length ? f.events.slice(0, 12).map(e => '<div class="pf-ev">' + ({ appointment: '📅 ', signed: '✍️ ', personal_best: '🏅 ', winner: '🏆 ', shout: '📣 ' }[e.kind] || '') + esc(e.text) + '<small>' + esc(String(e.t).replace('T', ' ').slice(0, 16)) + '</small></div>').join('') : '<div class="pf-dim">Quiet so far today. Appointments, signings, personal bests and shout-outs show up here for the whole team.</div>') + '</div>';
+        (P.msg ? '<div class="pf-msg">' + esc(P.msg) + '</div>' : '') + (!f ? '<div class="pf-dim">Loading…</div>' : f.error ? errLine(f) : f.events.length ? f.events.slice(0, 12).map(e => '<div class="pf-ev">' + ({ appointment: '📅 ', signed: '✍️ ', personal_best: '🏅 ', winner: '🏆 ', shout: '📣 ' }[e.kind] || '') + esc(e.text) + '<small>' + esc(String(e.t).replace('T', ' ').slice(0, 16)) + '</small></div>').join('') : '<div class="pf-dim">Quiet so far today. Appointments, signings, personal bests and shout-outs show up here for the whole team.</div>') + '</div>';
     }
     function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); } host.innerHTML = boardCard() + recordCard() + compCard() + riskCard(); wire(host); }
     function paintMe() { const w = $('meWrap'); if (!w) return; injectCss(); let host = $('pfMe'); if (!host) { host = document.createElement('div'); host.id = 'pfMe'; host.className = 'stack'; const stack = w.querySelector('.stack'); if (stack && stack.children.length > 1) stack.insertBefore(host, stack.children[1]); else w.appendChild(host); } host.innerHTML = paceCard() + profileCard() + feedCard() + usageCard(); wire(host); }
@@ -3348,13 +3352,13 @@ window.CW_DECKS = [
       host.querySelectorAll('[data-pf="end"]').forEach(b => b.onclick = () => endComp(b.dataset.id));
       host.querySelectorAll('[data-pf="shout"]').forEach(b => b.onclick = postShout);
     }
-    async function loadBoard() { try { P.board = await call('/perf/board', { metric: P.metric, window: P.window, cohort: P.cohort, scope: P.scope }); } catch (e) { P.board = { rows: [], as_of: '', error: e.message }; } paintTeam(); }
+    async function loadBoard() { try { P.board = await call('/perf/board', { metric: P.metric, window: P.window, cohort: P.cohort, scope: P.scope }); } catch (e) { P.board = { rows: [], as_of: '', error: fail(e) }; } paintTeam(); }
     async function loadProfile() { try { P.profile = await call('/perf/badges', {}); } catch (e) { P.profile = { profile: {}, badges: [], earned: 0, next: [], error: e.message }; } paintMe(); }
-    async function loadUsage() { if (!admin()) return; try { P.usage = await call('/billing/usage', {}); } catch (e) { P.usage = { month: '', rows: [], error: e.message }; } paintMe(); }
-    async function loadComps() { try { P.comps = await call('/perf/competitions', {}); } catch (e) {} paintTeam(); }
-    async function loadRisk() { if (!mgr()) return; try { P.risk = await call('/perf/risk', {}); } catch (e) {} paintTeam(); }
-    async function loadPace() { try { P.pace = await call('/perf/pace', { goals: (window.A && A.goals) || {} }); } catch (e) {} paintMe(); }
-    async function loadFeed() { try { P.feed = await call('/perf/feed', {}); } catch (e) {} paintMe(); }
+    async function loadUsage() { if (!admin()) return; try { P.usage = await call('/billing/usage', {}); } catch (e) { P.usage = { month: '', rows: [], error: fail(e) }; } paintMe(); }
+    async function loadComps() { try { P.comps = await call('/perf/competitions', {}); } catch (e) { P.comps = { competitions: [], error: fail(e) }; } paintTeam(); }
+    async function loadRisk() { if (!mgr()) return; try { P.risk = await call('/perf/risk', {}); } catch (e) { P.risk = { at_risk: [], checked: 0, error: fail(e) }; } paintTeam(); }
+    async function loadPace() { try { P.pace = await call('/perf/pace', { goals: (window.A && A.goals) || {} }); } catch (e) { P.pace = { error: fail(e) }; } paintMe(); }
+    async function loadFeed() { try { P.feed = await call('/perf/feed', {}); } catch (e) { P.feed = { events: [], error: fail(e) }; } paintMe(); }
     async function createComp() {
       const name = ($('pfName') || {}).value || '', metric = ($('pfMetric') || {}).value || 'doors', days = ($('pfDays') || {}).value || '7', prize = ($('pfPrize') || {}).value || '';
       const kind = ($('pfKind') || {}).value || 'leaderboard', target = Number(($('pfTarget') || {}).value || 0), scope = ($('pfScope') || {}).value || 'company';
