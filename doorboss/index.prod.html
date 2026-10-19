@@ -2990,6 +2990,31 @@ window.CW_DECKS = [
     const str = (x, n) => String(x === null || x === undefined ? '' : x).replace(/[\u0000-\u0008\u000b-\u001f]/g, '').slice(0, n);   // control chars (incl. the card's part separator) never get through; display is escaped anyway
     const post = m => { try { if (V.win && !V.win.closed) V.win.postMessage(m, AI_ORIGIN); } catch (e) {} };
 
+    // v46 (Charles 10/20: "of course we want the damn recordings kept"): recordings are kept on the server; list this house's and play them
+    function recsHtml() {
+      const C = CW.api.state(); const pid = C && C.id; if (!pid) return '';
+      if (V.recsFor !== pid) { V.recsFor = pid; V.recs = null; setTimeout(loadRecs, 0); }
+      if (!V.recs || !V.recs.length) return '';
+      return '<div class="cw-priv" style="margin-top:10px">Call recordings at this house</div>' + V.recs.slice(0, 6).map(r => {
+        const d = r.start_ts ? new Date(r.start_ts * 1000) : null; const mm = Math.floor((r.duration || 0) / 60), ss = String((r.duration || 0) % 60).padStart(2, '0');
+        return '<div class="row" style="gap:6px;align-items:center;margin-top:4px"><button type="button" class="btn sm" data-vc="play" data-rid="' + esc(r.id) + '">▶ Play</button><span class="cw-priv">' + esc(d ? d.toLocaleString() : '') + ' · ' + mm + ':' + ss + (r.rep_name ? ' · ' + esc(r.rep_name) : '') + '</span></div>';
+      }).join('');
+    }
+    async function loadRecs() {
+      const C = CW.api.state(); const pid = C && C.id; if (!pid) return;
+      try {
+        const r = await fetch(AI_BASE + '/recordings/list', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok() }, body: JSON.stringify({ property_id: pid }) });
+        const j = await r.json().catch(() => ({})); if (V.recsFor === pid) { V.recs = Array.isArray(j.recordings) ? j.recordings : []; paint(); }
+      } catch (e) {}
+    }
+    async function playRec(rid) {
+      let w = null; try { w = window.open('', '_blank'); } catch (e) {}   // opened on the tap so the browser allows it; filled once the link arrives
+      try {
+        const r = await fetch(AI_BASE + '/recordings/link', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok() }, body: JSON.stringify({ id: rid }) });
+        const j = await r.json().catch(() => ({}));
+        if (j.url) { if (w) w.location = AI_BASE + j.url; else window.open(AI_BASE + j.url, '_blank'); } else { if (w) w.close(); try { toast(j.error || 'Could not open the recording'); } catch (e) {} }
+      } catch (e) { if (w) w.close(); }
+    }
     function resetWin(msg) { clearInterval(V.poll); V.poll = null; V.win = null; V.s = null; V.lastConsent = null; V.msg = msg || ''; }
     function start(rejoinRoom) {
       if (V.win && !V.win.closed) { try { V.win.focus(); } catch (e) {} return; }
@@ -3005,7 +3030,7 @@ window.CW_DECKS = [
         } catch (e) {}
       }, 1500); paint();
     }
-    function endCall(quiet) { V.lost = null; V.last = null; post({ type: 'end' }); try { if (V.win && !V.win.closed) setTimeout(() => { try { V.win && V.win.close(); } catch (e) {} }, 700); } catch (e) {} resetWin(quiet ? '' : 'Call ended.'); if (!quiet) paint(); }
+    function endCall(quiet) { V.lost = null; V.last = null; setTimeout(() => { V.recsFor = null; paint(); }, 150000); post({ type: 'end' }); try { if (V.win && !V.win.closed) setTimeout(() => { try { V.win && V.win.close(); } catch (e) {} }, 700); } catch (e) {} resetWin(quiet ? '' : 'Call ended.'); if (!quiet) paint(); }
     function apply(k, v) {   // an accepted suggestion goes into the case file (the manager tapped Use); < > are stripped so no markup ever reaches the notes / GHL
       if (!LABEL[k]) return; const C = CW.api.state(); if (!C) return; if (typeof v === 'string') v = v.replace(/[<>]/g, '').trim(); V.ai[k] = { value: v }; const map = { monthly_payment: 'actual', promised_monthly: 'promised', lender: 'lender' };
       if (map[k]) CW.api.setThey(map[k], String(v));
@@ -3050,7 +3075,7 @@ window.CW_DECKS = [
     window.addEventListener('message', e => {
       if (!V.win || e.source !== V.win || e.origin !== AI_ORIGIN) return; const m = e.data || {};
       try {
-        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined }); }   // the manager's own sign-in unlocks the call window: nothing to type
+        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined, property_id: (C && C.id) || undefined }); }   // the manager's own sign-in unlocks the call window: nothing to type
         else if (m.type === 'state' && /^db-[0-9a-f]{10}$/.test(String(m.room || '')) && !V.last) { V.last = { room: String(m.room), exp: +m.exp || 0 }; V.lost = null; }
         if (m.type === 'consent') {   // the Record button in the call window: tick DoorBoss's own "record" switch (same path as tapping it here)
           const C = CW.api.state(); V.lastConsent = !!m.rec;
@@ -3077,7 +3102,7 @@ window.CW_DECKS = [
           '\u0001' + (s && s.sugs.length ?'<div class="cw-priv" style="margin-top:8px">The AI heard (tap Use to put it in the case file)</div>' + s.sugs.map(x => '<div class="vc-sug"><div><b>' + esc(LABEL[x.k]) + ':</b> ' + esc(MONEY.has(x.k) && typeof x.v === 'number' ? '$' + x.v.toLocaleString('en-US') : String(x.v)) + '<small>they said: "' + esc(x.e) + '"</small></div><div class="row" style="gap:4px"><button type="button" class="btn sm primary" data-vc="use" data-k="' + esc(x.k) + '">Use</button><button type="button" class="btn sm" data-vc="no" data-k="' + esc(x.k) + '">No</button></div></div>').join('') : '');
       }
       if (alive(V.lost)) return '<div class="vc-msg"><b>Your call is still open.</b> The homeowner may still be on.</div><div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn primary" data-vc="rejoin">↩ Rejoin call</button><button type="button" class="btn sm danger" data-vc="endlost">End call for everyone</button><button type="button" class="btn sm" data-vc="start">Start a new call</button></div>';
-      return (V.msg ? '<div class="vc-msg">' + esc(V.msg) + '</div>' : '') + '<button type="button" class="btn primary" data-vc="start">📹 Start video call</button><div class="cw-priv" style="margin-top:6px">Opens a call window with a private room. You send the homeowner the link. Nothing records until they say OK.</div>';
+      return (V.msg ? '<div class="vc-msg">' + esc(V.msg) + '</div>' : '') + '<button type="button" class="btn primary" data-vc="start">📹 Start video call</button><div class="cw-priv" style="margin-top:6px">Opens a call window with a private room. You send the homeowner the link. Nothing records until they say OK.</div>' + recsHtml();
     }
     // three parts (status+buttons / transcript / AI suggestions), each rewritten only when its own HTML changed, so a new transcript line never swaps the Use/No buttons out from under a tap
     function paint() {
@@ -3090,6 +3115,7 @@ window.CW_DECKS = [
       const b = e.target.closest('[data-vc]'); if (!b) return; const a = b.dataset.vc;
       try {
         if (a === 'start') start();
+        else if (a === 'play') playRec(b.dataset.rid);
         else if (a === 'rejoin') { if (alive(V.lost)) start(V.lost.room); else { V.lost = null; paint(); } }
         else if (a === 'endlost') {   // the window is gone but the room is open: end it for everyone from here
           const r = V.lost; V.lost = null; V.last = null; V.msg = 'Call ended.'; paint();
