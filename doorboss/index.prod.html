@@ -2486,7 +2486,7 @@ window.CW_DECKS = [
     const hooks = { afterRender: [], onClose: [], onFinish: [] };   // extension points (the presentation engine uses afterRender/onClose; the after-call writer uses onFinish)
 
     const prop = () => (C && byId(A.props, C.id)) || null;
-    const allowed = () => { try { return !!(A && A.me && (A.me.role === 'admin' || A.me.role === 'manager')); } catch (e) { return false; } };
+    const allowed = () => { try { return !!(A && A.me); } catch (e) { return false; } };   // v44 (Charles 10/19): every signed-in user (rep, manager, admin) can start a call
     const narrow = () => { try { return window.matchMedia('(max-width:1000px)').matches; } catch (e) { return false; } };
     const instOf = p => (p && p.installer && !/^unknown$/i.test(p.installer)) ? p.installer : 'the installer';
     function closureWords(p) {
@@ -2717,7 +2717,7 @@ window.CW_DECKS = [
     function startCall() { if (C && !C.live) { C.live = true; C.startedAt = Date.now(); } }
 
     function open(id) {
-      if (!allowed()) { try { toast('The call screen is for managers.'); } catch (e) {} return; }   // v27: the gate lives here too, not only on the button (CW.open is reachable from the console)
+      if (!allowed()) { try { toast('Sign in to start a call.'); } catch (e) {} return; }   // v27: the gate lives here too, not only on the button (CW.open is reachable from the console)
       const p = byId(A.props, id); if (!p) return; injectCss(); if (typeof closeSheet === 'function') closeSheet();
       const saved = loadSaved(id) || {};
       C = { id, live: false, startedAt: null, seed: Math.floor(Math.random() * 1000), stage: 0, qi: STAGES.map(() => 0), active: null, heard: '', noMatch: false, anim: false, allOpen: false, fired: [], unmatched: [], fb: {}, consent: Object.assign({ rec: false, text: false, docs: false }, saved.consent || {}),
@@ -2919,7 +2919,7 @@ window.CW_DECKS = [
     }
     function ensureCss() { if (document.getElementById('pzCss')) return; const s = document.createElement('style'); s.id = 'pzCss'; s.textContent = PZ_CSS; document.head.appendChild(s); }
     function startPoll() { if (PR.timer) return; PR.timer = setInterval(() => { if (!surfaces().length) { clearInterval(PR.timer); PR.timer = null; return; } if (sig() !== PR.sig) refresh({ keepFocus: true }); }, 500); }
-    const mgrOk = () => { try { return !!(A && A.me && (A.me.role === 'admin' || A.me.role === 'manager')); } catch (e) { return false; } };   // v30: the presentation surfaces are manager-only even when called from the console
+    const mgrOk = () => { try { return !!(A && A.me); } catch (e) { return false; } };   // v44: every signed-in user can present (was manager-only)   // v30: the presentation surfaces are manager-only even when called from the console
     function openHere() {
       if (!mgrOk()) return;
       if (PR.overlay && PR.overlay.isConnected) return; ensureCss();
@@ -3025,7 +3025,7 @@ window.CW_DECKS = [
     }
     async function writeBack(snap) {
       if (!snap) return;
-      const body = { property_id: snap.property_id, outcome: snap.outcome, they: snap.they, ai: Object.assign({}, V.ai), docs: snap.docs, notes: snap.notes, consent: snap.consent, summary: snap.summary, started_at: snap.started_at, rep_name: str(window.A && A.me && A.me.name, 60) };
+      const body = { property_id: snap.property_id, outcome: snap.outcome, they: snap.they, ai: Object.assign({}, V.ai), docs: snap.docs, notes: snap.notes, consent: snap.consent, summary: snap.summary, started_at: snap.started_at, rep_name: str((typeof A !== "undefined" && A && A.me && A.me.name), 60) };
       V.ai = {};
       try {
         const j = await sendBack(body);
@@ -3047,7 +3047,7 @@ window.CW_DECKS = [
     window.addEventListener('message', e => {
       if (!V.win || e.source !== V.win || e.origin !== AI_ORIGIN) return; const m = e.data || {};
       try {
-        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str(window.A && A.me && A.me.name, 40) || 'Rep', consent: V.lastConsent, token: tok() }); }   // the manager's own sign-in unlocks the call window: nothing to type
+        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok() }); }   // the manager's own sign-in unlocks the call window: nothing to type
         else if (m.type === 'state') { V.s = { status: str(m.status, 12), msg: str(m.msg, 200), link: str(m.link, 400), remote: !!m.remote, txOn: !!m.txOn, aiMsg: str(m.aiMsg, 200), lines: (Array.isArray(m.lines) ? m.lines : []).slice(-8).map(l => ({ who: l && l.who === 'REP' ? 'REP' : 'HOMEOWNER', text: str(l && l.text, 600) })), sugs: (Array.isArray(m.sugs) ? m.sugs : []).filter(s => s && LABEL[s.k]).slice(0, 19).map(s => ({ k: s.k, v: typeof s.v === 'number' || typeof s.v === 'boolean' ? s.v : str(s.v, 120), e: str(s.e, 160) })) }; paint(); }
         else if (m.type === 'apply') { apply(str(m.k, 30), typeof m.v === 'number' || typeof m.v === 'boolean' ? m.v : str(m.v, 120)); paint(); }
         else if (m.type === 'ended') { resetWin('Call ended.'); paint(); }
@@ -3365,7 +3365,7 @@ window.CW_DECKS = [
     async function loadUsage() { if (!admin()) return; try { P.usage = await call('/billing/usage', {}); } catch (e) { P.usage = { month: '', rows: [], error: fail(e) }; } paintMe(); }
     async function loadComps() { try { P.comps = await call('/perf/competitions', {}); } catch (e) { P.comps = { competitions: [], error: fail(e) }; } paintTeam(); }
     async function loadRisk() { if (!mgr()) return; try { P.risk = await call('/perf/risk', {}); } catch (e) { P.risk = { at_risk: [], checked: 0, error: fail(e) }; } paintTeam(); }
-    async function loadPace() { try { P.pace = await call('/perf/pace', { goals: (window.A && A.goals) || {} }); } catch (e) { P.pace = { error: fail(e) }; } paintMe(); }
+    async function loadPace() { try { P.pace = await call('/perf/pace', { goals: (typeof A !== "undefined" && A && A.goals) || {} }); } catch (e) { P.pace = { error: fail(e) }; } paintMe(); }
     async function loadFeed() { try { P.feed = await call('/perf/feed', {}); } catch (e) { P.feed = { events: [], error: fail(e) }; } paintMe(); }
     async function createComp() {
       const name = ($('pfName') || {}).value || '', metric = ($('pfMetric') || {}).value || 'doors', days = ($('pfDays') || {}).value || '7', prize = ($('pfPrize') || {}).value || '';
@@ -3442,6 +3442,29 @@ window.CW_DECKS = [
       return out;
     };
   } catch (e) { console.warn('export guard', e); }
+})();
+
+</script>
+<script>
+/* ===== DoorBoss DEEP LINK v44 (10/19, Charles: the portal's separate Team page "only shows the live stuff, none of the leaderboards").
+   The portal's Team button now opens DoorBoss with ?view=team (optionally &sub=board|live|stats|territories|data), so there is ONE Team screen.
+   Only known tab names are accepted; anything else is ignored. Never write literal closing tags in this file (the preview host injects at the first one). */
+(function () {
+  try {
+    const q = new URLSearchParams(location.search), view = String(q.get('view') || ''), sub = String(q.get('sub') || '');
+    if (!/^(map|follow|team|me)$/.test(view)) return;
+    let n = 0;
+    const t = setInterval(() => {
+      n++;
+      try {
+        if (typeof showView === 'function' && typeof A !== 'undefined' && A && A.me && document.getElementById('tabbar')) {   // A is a top-level const, not window.A
+          clearInterval(t);
+          if (view === 'team' && /^(board|live|stats|territories|data)$/.test(sub)) A.teamTab = sub;
+          showView(view);
+        } else if (n > 60) clearInterval(t);
+      } catch (e) { clearInterval(t); }
+    }, 500);
+  } catch (e) {}
 })();
 
 </script>
