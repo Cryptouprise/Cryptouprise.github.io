@@ -2684,7 +2684,7 @@ window.CW_DECKS = [
         (src ? '<div style="margin-top:14px;font-size:16px;color:#5a6773">' + esc(src) + '</div>' : '') +
         '<div style="margin-top:30px;font-size:18px;color:#121a22">' + esc(p.address) + (p.permit_year ? '<div style="font-size:15px;color:#5a6773;margin-top:4px">Solar permit filed ' + esc(p.permit_year) + '</div>' : '') + '</div>' +
         '<div style="margin-top:30px;font-size:13px;color:#8a96a2">Information from public records.</div></div>';
-      return standalone ? '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Installer record</title></head><body style="margin:0;background:#f4f6f8;color:#121a22;display:flex;justify-content:center;padding:30px 18px">' + body + '</body></html>' : body;
+      return standalone ? '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Installer record</title><\/head><body style="margin:0;background:#f4f6f8;color:#121a22;display:flex;justify-content:center;padding:30px 18px">' + body + '<\/body><\/html>' : body;
     }
     function showOverlay() {
       const p = prop(); if (!p || document.getElementById('cwShow')) return; const el = document.createElement('div'); el.className = 'cw-show'; el.id = 'cwShow'; el.style.background = '#f4f6f8';
@@ -2796,12 +2796,14 @@ window.CW_DECKS = [
       render();
     }
 
+    // 10/19: never write a literal close-body/close-html/close-head tag in this file: the portal's preview host injects its scripts before the FIRST one it finds, which cut this script in half live
     // hook into the house card: managers/admins get a Start call button (reps never see it)
     const _renderSheet = window.renderSheet;
     if (typeof _renderSheet === 'function') {
       window.renderSheet = function () {
         const r = _renderSheet.apply(this, arguments);
-        try { if (allowed() && A.sheetProp && !document.getElementById('shCall')) { const c = document.getElementById('sheetClose'); if (c) { c.insertAdjacentHTML('beforebegin', '<button class="btn sm primary" id="shCall" type="button">🎧 Start call</button>'); document.getElementById('shCall').onclick = () => open(A.sheetProp.id); } } } catch (e) { console.warn('call button', e); }
+        try { const stray = document.getElementById('shCall'); if (stray && !stray.closest('#sheet')) stray.remove();   /* 10/19: a button left outside the house card (seen live at y=1847 under <body>) blocked every later card from getting one */
+          if (allowed() && A.sheetProp && !document.querySelector('#sheet #shCall')) { const c = document.querySelector('#sheet #sheetClose') || document.getElementById('sheetClose'); if (c && c.closest('#sheet')) { c.insertAdjacentHTML('beforebegin', '<button class="btn sm primary" id="shCall" type="button">🎧 Start call</button>'); document.getElementById('shCall').onclick = () => open(A.sheetProp.id); } } } catch (e) { console.warn('call button', e); }
         return r;
       };
     }
@@ -3339,7 +3341,10 @@ window.CW_DECKS = [
       return '<div class="card stack" id="pfFeed"><h3 style="font-size:18px">Team feed</h3>' + (me ? '<div class="row" style="gap:6px"><input class="cw-in" id="pfShout" maxlength="200" placeholder="Shout-out to the team…" style="flex:1;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--line,#cfd6dc);background:transparent;color:inherit"><button type="button" class="btn sm primary" data-pf="shout">Post</button></div>' : '') +
         (P.msg ? '<div class="pf-msg">' + esc(P.msg) + '</div>' : '') + (!f ? '<div class="pf-dim">Loading…</div>' : f.error ? errLine(f) : f.events.length ? f.events.slice(0, 12).map(e => '<div class="pf-ev">' + ({ appointment: '📅 ', signed: '✍️ ', personal_best: '🏅 ', winner: '🏆 ', shout: '📣 ' }[e.kind] || '') + esc(e.text) + '<small>' + esc(String(e.t).replace('T', ' ').slice(0, 16)) + '</small></div>').join('') : '<div class="pf-dim">Quiet so far today. Appointments, signings, personal bests and shout-outs show up here for the whole team.</div>') + '</div>';
     }
-    function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); } host.innerHTML = boardCard() + recordCard() + compCard() + riskCard(); wire(host); }
+    function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); }
+      const onBoard = (() => { try { return (A.teamTab || 'board') === 'board'; } catch (e) { return true; } })();   /* 10/19: the leaderboard cards belong to the Leaderboard tab only; on Territories/Data/Live/Stats they pushed the tab's own content (Draw a new territory) below the screen */
+      host.style.display = onBoard ? '' : 'none'; if (!onBoard) { host.innerHTML = ''; return; }
+      host.innerHTML = boardCard() + recordCard() + compCard() + riskCard(); wire(host); }
     function paintMe() { const w = $('meWrap'); if (!w) return; injectCss(); let host = $('pfMe'); if (!host) { host = document.createElement('div'); host.id = 'pfMe'; host.className = 'stack'; const stack = w.querySelector('.stack'); if (stack && stack.children.length > 1) stack.insertBefore(host, stack.children[1]); else w.appendChild(host); } host.innerHTML = paceCard() + profileCard() + feedCard() + usageCard(); wire(host); }
     function wire(host) {
       host.querySelectorAll('[data-pf="metric"] button').forEach(b => b.onclick = () => { P.metric = b.dataset.k; loadBoard(); });
