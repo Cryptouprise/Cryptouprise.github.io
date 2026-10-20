@@ -2428,6 +2428,40 @@ window.CW_CONTENT = {
    Slide types: title, bullets, steps, record, gap, checklist, compare, timeline, choice, faq, bigtext (see call-present.js). Tokens: {first} {rep} {installer} {closure}.
    'note' is PRIVATE to the rep (never shown to the homeowner). RULES: no promises, no "free / no obligation / no fee", no legal claims, no outcomes; confirm:true lines in call-content.js still apply. ===== */
 window.CW_DECKS = [
+  // v47 (Charles 10/20): the Training Center 'Slides' deck from the intake portal is THE homeowner presentation (English, then Spanish).
+  { id: 'training', name: 'Elite Recovery slides (Training Center)', desc: 'The slides from the Training Center. Show these to the homeowner.', slides: [
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/01.jpg', title: 'Slide 1' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/02.jpg', title: 'Slide 2' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/03.jpg', title: 'Slide 3' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/04.jpg', title: 'Slide 4' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/05.jpg', title: 'Slide 5' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/06.jpg', title: 'Slide 6' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/07.jpg', title: 'Slide 7' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/08.jpg', title: 'Slide 8' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/09.jpg', title: 'Slide 9' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/10.jpg', title: 'Slide 10' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/11.jpg', title: 'Slide 11' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/12.jpg', title: 'Slide 12' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/13.jpg', title: 'Slide 13' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/en/14.jpg', title: 'Slide 14' },
+  ] },
+  { id: 'training_es', name: 'Diapositivas en espanol (Training Center)', desc: 'The Spanish slides from the Training Center.', slides: [
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/01.jpg', title: 'Diapositiva 1' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/02.jpg', title: 'Diapositiva 2' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/03.jpg', title: 'Diapositiva 3' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/04.jpg', title: 'Diapositiva 4' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/05.jpg', title: 'Diapositiva 5' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/06.jpg', title: 'Diapositiva 6' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/07.jpg', title: 'Diapositiva 7' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/08.jpg', title: 'Diapositiva 8' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/09.jpg', title: 'Diapositiva 9' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/10.jpg', title: 'Diapositiva 10' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/11.jpg', title: 'Diapositiva 11' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/12.jpg', title: 'Diapositiva 12' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/13.jpg', title: 'Diapositiva 13' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/14.jpg', title: 'Diapositiva 14' },
+    { type: 'image', src: 'https://doorboss-ai.178-156-248-248.sslip.io/deck/es/15.jpg', title: 'Diapositiva 15' },
+  ] },
   { id: 'plain', name: 'Your solar, in plain English', desc: 'The main deck: who we are, your installer record, the gap, what we need, next step. About 5 minutes.', slides: [
     { type: 'title', title: "Let's look at your solar together", sub: 'No pressure. Just a clear look at where you stand.' },
     { type: 'bullets', title: 'What we do', bullets: ['We read your solar contract and your loan with you', 'We check what the public record says about your installer', 'We tell you plainly what we see', 'We never promise an outcome'], note: 'Say the last line slowly. It builds trust.' },
@@ -2840,7 +2874,7 @@ window.CW_DECKS = [
 .pz *{box-sizing:border-box}.pz button{font-family:inherit;cursor:pointer}
 .pz-top{display:flex;justify-content:space-between;padding:14px 22px;font-size:14px;color:#5a6773;letter-spacing:.08em;text-transform:uppercase;font-weight:700}
 .pz-stage{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;padding:8px 28px 18px;max-width:1120px;width:100%;margin:0 auto}
-.pz-slide{width:100%;animation:pzIn .25s ease-out}@keyframes pzIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
+.pz-imgwrap{display:flex;align-items:center;justify-content:center;width:100%}.pz-img{max-width:100%;max-height:calc(100vh - 170px);border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.25);user-select:none}.pz-slide{width:100%;animation:pzIn .25s ease-out}@keyframes pzIn{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.pz-slide{animation:none}}
 .pz h1{font-size:clamp(38px,7vw,84px);line-height:1.04;margin:0;text-align:center;font-weight:800}
 .pz h2{font-size:clamp(28px,4.6vw,54px);line-height:1.1;margin:0 0 22px;text-align:center;font-weight:800}
@@ -2867,6 +2901,8 @@ window.CW_DECKS = [
 
     // ---- slide renderers: return HTML built only from escaped text ----
     const R = {
+      // v47: picture slides (the Training Center deck). Only images from our own deck folder are allowed.
+      image: s => { const src = String(s.src || ''); return /^https:\/\/doorboss-ai\.178-156-248-248\.sslip\.io\/deck\/(en|es)\/\d{2}\.jpg$/.test(src) ? '<div class="pz-imgwrap"><img class="pz-img" src="' + esc(src) + '" alt="' + esc(s.title || 'Slide') + '" draggable="false"></div>' : '<div style="text-align:center"><h1>' + T(s.title || 'Slide') + '</h1></div>'; },
       title: s => '<div style="text-align:center"><h1>' + T(s.title) + '</h1>' + (s.sub ? '<p class="pz-sub">' + T(s.sub) + '</p>' : '') + '</div>',
       bigtext: s => '<div style="text-align:center"><h1 style="font-size:clamp(34px,6vw,72px)">' + T(s.text) + '</h1>' + (s.sub ? '<p class="pz-sub">' + T(s.sub) + '</p>' : '') + '</div>',
       bullets: s => '<h2>' + T(s.title) + '</h2><ul class="pz-bul">' + (s.bullets || []).slice(0, 6).map(b => '<li>' + T(b) + '</li>').join('') + '</ul>',
