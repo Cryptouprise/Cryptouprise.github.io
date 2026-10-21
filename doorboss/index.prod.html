@@ -3542,11 +3542,14 @@ window.CW_DECKS = [
       const t2 = setInterval(async () => {
         k++;
         try {
-          if (!(typeof A !== 'undefined' && A && A.me && window.CW && typeof api === 'function')) { if (k > 60) clearInterval(t2); return; }
+          if (!(typeof A !== 'undefined' && A && A.me && window.CW)) { if (k > 60) clearInterval(t2); return; }
           clearInterval(t2);
           const vid = 'intake:' + call;
           if (!A.props.some(p => p.id === vid)) {
-            const it = await api('GET', '/portal/intakes/' + encodeURIComponent(call));
+            // api() is not reachable from this script (live-verified 10/21), so: the same token + company header DoorBoss itself uses
+            const hdr = { Authorization: 'Bearer ' + (localStorage.getItem('doorboss.token') || localStorage.getItem('repAccessKey') || '') }; try { const co = localStorage.getItem('actingCompany'); if (co) hdr['x-company'] = co; } catch (e) {}
+            const rr = await fetch('/api/portal/intakes/' + encodeURIComponent(call), { headers: hdr, credentials: 'same-origin' }); if (!rr.ok) throw new Error('intake ' + rr.status);
+            const it = await rr.json();
             let fd = {}; try { fd = typeof it.form_data === 'string' ? JSON.parse(it.form_data) : (it.form_data || {}); } catch (e) {}
             A.props.push({ id: vid, intake_id: call, virtual: true, address: String(it.property_address || fd.propertyAddress || 'Address not entered'), owner_name: String(it.client_name || fd.clientName || 'Client'),
               owner_phone: String(it.client_phone || fd.clientPhone || ''), owner_email: String(it.client_email || fd.clientEmail || ''), installer: String(fd.solarInstaller || ''), finance_co: String(fd.financeCompanyIntake || fd.lenderName || ''),
