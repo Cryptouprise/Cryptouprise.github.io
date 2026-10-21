@@ -2795,8 +2795,14 @@ window.CW_DECKS = [
     function finish(kind) {
       const p = prop(); if (!p) return; const note = summary(), st = OUTCOMES[kind], textOk = !!C.consent.text; persist(); const id = p.id;
       try { const snap = { property_id: id, outcome: st, they: Object.assign({}, C.they), docs: (C.docs || []).slice(), notes: String(C.notes || ''), consent: Object.assign({}, C.consent), summary: note, started_at: C.startedAt || null };
+        if (p.intake_id) snap.intake_id = p.intake_id;   /* v48: the after-call writer updates this intake instead of making one */
         for (const f of hooks.onFinish || []) { try { f(snap); } catch (e) { console.warn('onFinish hook', e); } } } catch (e) {}   /* v38: the after-call writer (call-video.js) gets the case file BEFORE the screen closes */
       close();
+      if (p.intake_id) {   /* v48: started from the intake page -> go back to that intake (the page reloads it fresh from the server) */
+        try { toast('Call logged. Back to the intake…'); } catch (e) {}
+        setTimeout(() => { const u = '/intake/' + encodeURIComponent(p.intake_id) + '?from=call'; try { window.top.location.href = u; } catch (e) { location.href = u; } }, 900);
+        return;
+      }
       openSheet(id);
       setTimeout(() => {
         try {
@@ -3089,7 +3095,7 @@ window.CW_DECKS = [
     }
     async function writeBack(snap) {
       if (!snap) return;
-      const body = { property_id: snap.property_id, outcome: snap.outcome, they: snap.they, ai: Object.assign({}, V.ai), docs: snap.docs, notes: snap.notes, consent: snap.consent, summary: snap.summary, started_at: snap.started_at, rep_name: str((typeof A !== "undefined" && A && A.me && A.me.name), 60) };
+      const body = { property_id: snap.intake_id ? undefined : snap.property_id, intake_id: snap.intake_id || undefined, outcome: snap.outcome, they: snap.they, ai: Object.assign({}, V.ai), docs: snap.docs, notes: snap.notes, consent: snap.consent, summary: snap.summary, started_at: snap.started_at, rep_name: str((typeof A !== "undefined" && A && A.me && A.me.name), 60) };
       V.ai = {};
       try {
         const j = await sendBack(body);
@@ -3111,7 +3117,7 @@ window.CW_DECKS = [
     window.addEventListener('message', e => {
       if (!V.win || e.source !== V.win || e.origin !== AI_ORIGIN) return; const m = e.data || {};
       try {
-        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined, property_id: (C && C.id) || undefined }); }   // the manager's own sign-in unlocks the call window: nothing to type
+        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined, property_id: (C && C.id && !/^intake:/.test(C.id)) ? C.id : undefined, intake_id: (C && C.id && /^intake:/.test(C.id)) ? C.id.slice(7) : undefined }); }   // the manager's own sign-in unlocks the call window: nothing to type
         else if (m.type === 'state' && /^db-[0-9a-f]{10}$/.test(String(m.room || '')) && !V.last) { V.last = { room: String(m.room), exp: +m.exp || 0 }; V.lost = null; }
         if (m.type === 'consent') {   // the Record button in the call window: tick DoorBoss's own "record" switch (same path as tapping it here)
           const C = CW.api.state(); V.lastConsent = !!m.rec;
@@ -3527,7 +3533,30 @@ window.CW_DECKS = [
    Only known tab names are accepted; anything else is ignored. Never write literal closing tags in this file (the preview host injects at the first one). */
 (function () {
   try {
-    const q = new URLSearchParams(location.search), view = String(q.get('view') || ''), sub = String(q.get('sub') || '');
+    const q = new URLSearchParams(location.search), view = String(q.get('view') || ''), sub = String(q.get('sub') || ''), call = String(q.get('call') || '');
+    // v48 (10/21, Charles: "the same exact thing we created in the door-to-door app"): /doors?call=<intake id> opens the full call workspace
+    // (stages, questions, Live coach, case file, documents, slides, video) for the intake's client. The client becomes a virtual house
+    // (id intake:<id>) so every workspace piece works; the after-call writer updates THAT intake; finishing returns to the intake page.
+    if (/^[A-Za-z0-9_-]{4,80}$/.test(call)) {
+      let k = 0;
+      const t2 = setInterval(async () => {
+        k++;
+        try {
+          if (!(typeof A !== 'undefined' && A && A.me && window.CW && typeof api === 'function')) { if (k > 60) clearInterval(t2); return; }
+          clearInterval(t2);
+          const vid = 'intake:' + call;
+          if (!A.props.some(p => p.id === vid)) {
+            const it = await api('GET', '/portal/intakes/' + encodeURIComponent(call));
+            let fd = {}; try { fd = typeof it.form_data === 'string' ? JSON.parse(it.form_data) : (it.form_data || {}); } catch (e) {}
+            A.props.push({ id: vid, intake_id: call, virtual: true, address: String(it.property_address || fd.propertyAddress || 'Address not entered'), owner_name: String(it.client_name || fd.clientName || 'Client'),
+              owner_phone: String(it.client_phone || fd.clientPhone || ''), owner_email: String(it.client_email || fd.clientEmail || ''), installer: String(fd.solarInstaller || ''), finance_co: String(fd.financeCompanyIntake || fd.lenderName || ''),
+              status: 'unknocked', territory_id: null, lat: null, lng: null, created_at: Date.now() });
+          }
+          window.CW.open(vid);
+        } catch (e) { clearInterval(t2); try { toast('Could not open the call for this intake: ' + String(e && e.message || e).slice(0, 80)); } catch (e2) {} }
+      }, 500);
+      return;
+    }
     if (!/^(map|follow|team|me)$/.test(view)) return;
     let n = 0;
     const t = setInterval(() => {
