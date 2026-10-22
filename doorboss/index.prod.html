@@ -1148,14 +1148,16 @@ function filterChips(){
   const c=$('#filterChips');
   c.innerHTML = defs.map(d => `<button class="chip${A.filter===d.id?' on':''}" data-f="${d.id}">${d.label}</button>`).join('') +
     `<button class="chip${A.mine?' on':''}" data-mine="1">My territory</button>` +
-    `<button class="chip${A.orphanOnly?' on':''}" data-orph="1">Orphaned installer</button>` +
+    `<button class="chip${A.orphanOnly?' on':''}" data-orph="1" style="${A.orphanOnly?'':'border-color:#e02438;color:#e02438'}">● Bankrupt installer</button>` +
+    `<button class="chip${A.activeOnly?' on':''}" data-act="1">In business</button>` +
     (isMgr() ? `<button class="chip${A.showReps?' on':''}" data-reps="1">Reps</button>` : '') +
     `<button class="chip${A.basemap==='satellite'?' on':''}" data-sat="1" ${A.schematic?'style="opacity:.5"':''}>Satellite</button>`;
-  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
+  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; if (A.orphanOnly) A.activeOnly=false; } else if (b.dataset.act){ A.activeOnly=!A.activeOnly; if (A.activeOnly) A.orphanOnly=false; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
 }
 function visibleProps(){
   return A.props.filter(p => {
     if (A.orphanOnly && p.installer_status!=='bankrupt') return false;   // the portal stores 'bankrupt' (orphaned installer) or 'unknown'
+    if (A.activeOnly && p.installer_status==='bankrupt') return false;   // v22.9: the other half: homes whose installer is still in business
     if (A.mine && !isMgr() && !inMyTerr(p)) return false;
     if (A.mine && isMgr() && myTerrs().length && !inMyTerr(p)) return false;
     switch (A.filter){
@@ -1176,7 +1178,8 @@ function pinStyle(p){
   const s=S[p.status]||S.unknocked; const col = pc.col[p.status] || (pc.col[p.status] = pc.css.getPropertyValue(s.color.slice(4,-1)).trim()||'#888');
   const big = p.status==='appointment'||p.status==='signed'||p.status==='callback';
   const base = pc.base, dark = pc.dark;
-  return { radius: big?base+2:base, fillColor:col, color: (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
+  const bk = p.installer_status==='bankrupt';   /* v22.9 (Charles 10/22): bankrupt installer = red pin + gold ring, so a rep sees it from across the street */
+  return { radius: big?base+2:base, fillColor: (bk && p.status==='unknocked') ? '#e02438' : col, color: bk ? '#ffc400' : (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: bk ? 3 : A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
 }
 const CLUSTER_ZOOM = 15;
 const clusterZoom = () => A.props.length > 8000 ? 16 : CLUSTER_ZOOM;   // v17: a big list stays clustered one zoom level longer
@@ -1280,7 +1283,7 @@ function updateNext(){
 function showOnMap(id){
   const p=byId(A.props,id); if (!p) return;
   closeSheet(); showView('map');
-  if (!visibleProps().some(x=>x.id===p.id)){ A.filter='all'; A.mine=false; A.orphanOnly=false; filterChips(); }
+  if (!visibleProps().some(x=>x.id===p.id)){ A.filter='all'; A.mine=false; A.orphanOnly=false; A.activeOnly=false; filterChips(); }
   setTimeout(()=>{ A.map.invalidateSize(); A.userMoved=true; A.map.setView([p.lat,p.lng], 18, { animate:false }); renderPins(); flashPin(p); }, 60);
 }
 function flashPin(p){
