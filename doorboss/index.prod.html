@@ -360,6 +360,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 <div id="app">
   <header class="topbar">
     <div class="brand"><span class="dot"></span><span>DoorBoss</span></div>
+    <a class="pill" id="toPortal" href="/" title="Back to the intake portal" style="text-decoration:none">← Intake</a>
     <span class="role-badge" id="roleBadge">Manager</span>
     <div class="spacer"></div>
     <button class="pill off" id="trackPill" title="Location tracking"><span class="led"></span><span id="trackText">GPS off</span></button>
@@ -1121,7 +1122,8 @@ function initMap(){
   map.on('moveend', () => { if (A._zr && Date.now() - A._zr < 400) return; if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); });   // v21: a zoom already redrew
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
   /* v22.7 (10/22, Charles: a rep could not get the suggested house off the screen): ✕ skips it for the rest of the day and shows the next one */
-  $('#nextSkip').onclick = () => { if (!A.nextId) return; const sk = skipLoad(); sk[A.nextId] = Date.now(); try { localStorage.setItem('doorboss.skipnext.v1', JSON.stringify(sk)); } catch(e){} A.nextId = null; updateNext(); toast($('#nextCard').hidden ? 'No more houses to suggest right now' : 'Skipped for today'); };
+  $('#nextSkip').onclick = () => { if (A.route) { A.route.i = Math.min(A.route.plan.length, A.route.i + 1); drawRoute(); showNextRouteCard(); toast(A.route ? 'Skipped that stop' : 'Route finished'); return; }   /* v22.8: on a route the X skips the stop */
+    if (!A.nextId) return; const sk = skipLoad(); sk[A.nextId] = Date.now(); try { localStorage.setItem('doorboss.skipnext.v1', JSON.stringify(sk)); } catch(e){} A.nextId = null; updateNext(); toast($('#nextCard').hidden ? 'No more houses to suggest right now' : 'Skipped for today'); };
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
 function setBasemap(b){
@@ -3028,7 +3030,7 @@ window.CW_DECKS = [
     const AI_ORIGIN = (() => { try { return new URL(AI_BASE).origin; } catch (e) { return AI_BASE; } })();
     const LABEL = { installer: 'Installer', installer_status: 'Installer status', financing: 'Financing', lender: 'Lender', loan_amount: 'Loan amount', loan_balance: 'Loan balance', monthly_payment: 'Pays now / month', promised_monthly: 'Told / month', interest_rate: 'Interest rate %', loan_term_years: 'Loan term (years)', system_size_kw: 'System size (kW)', year_installed: 'Year installed', has_battery: 'Has battery', system_working: 'System working', promise_in_writing: 'Promise in writing', contacted_installer: 'Contacted installer', contacted_lender: 'Contacted lender', other_signer: 'Other signer', main_issue: 'Main issue' };
     const MONEY = new Set(['loan_amount', 'loan_balance', 'monthly_payment', 'promised_monthly']);
-    const V = { win: null, s: null, msg: '', lastConsent: null, ai: {}, poll: null, armEnd: 0, html: ['', '', ''], last: null, lost: null, rejoin: '', inperson: false };   /* inperson (10/21, Charles: "Live in-person record"): same window, same AI, the rep's mic hears both people */
+    const V = { win: null, s: null, msg: '', lastConsent: null, ai: {}, poll: null, armEnd: 0, html: ['', '', ''], last: null, lost: null, rejoin: '', inperson: false, frame: null };   /* frame (10/22, Charles: "why does there have to be two?"): the call runs in a panel docked inside this screen, not a second window */   /* inperson (10/21, Charles: "Live in-person record"): same window, same AI, the rep's mic hears both people */
     // v45 (Charles 10/19: "no place to go back in the app and reopen my meeting ... the homeowner was still on"): the open room is remembered so the rep can REJOIN it
     const alive = r => !!(r && r.room && (!r.exp || r.exp * 1000 > Date.now() + 30000));
     const tok = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
@@ -3060,22 +3062,29 @@ window.CW_DECKS = [
         if (j.url) { if (w) w.location = AI_BASE + j.url; else window.open(AI_BASE + j.url, '_blank'); } else { if (w) w.close(); try { toast(j.error || 'Could not open the recording'); } catch (e) {} }
       } catch (e) { if (w) w.close(); }
     }
-    function resetWin(msg) { clearInterval(V.poll); V.poll = null; V.win = null; V.s = null; V.lastConsent = null; V.msg = msg || ''; }
+    const winOpen = () => !!V.win && (V.frame ? V.frame.isConnected : !V.win.closed);
+    function undock() { try { if (V.frame) V.frame.remove(); } catch (e) {} V.frame = null; try { document.documentElement.classList.remove('vc-docked'); } catch (e) {} }
+    function dock() {   /* the call panel: right column on a wide screen, top band on a phone; lives on <body> so a workspace re-render never reloads the call */
+      undock(); const fr = document.createElement('iframe'); fr.id = 'vcFrame'; fr.title = 'Call'; fr.setAttribute('allow', 'camera; microphone; autoplay; display-capture; speaker-selection');
+      fr.src = AI_BASE + '/call?o=' + encodeURIComponent(location.origin) + '&embed=1'; document.body.appendChild(fr); document.documentElement.classList.add('vc-docked'); V.frame = fr; return fr.contentWindow;
+    }
+    function resetWin(msg, keepFrame) { clearInterval(V.poll); V.poll = null; V.win = null; V.s = null; V.lastConsent = null; V.msg = msg || ''; if (!keepFrame) undock(); }
     function start(rejoinRoom, mode) {
-      if (V.win && !V.win.closed) { try { V.win.focus(); } catch (e) {} return; }
+      if (winOpen()) { try { if (V.frame) V.frame.scrollIntoView({ block: 'nearest' }); else V.win.focus(); } catch (e) {} return; }
       V.rejoin = rejoinRoom || ''; V.lost = null; if (!rejoinRoom) { V.last = null; V.inperson = mode === 'inperson'; }   // the "still open" note is cleared once we (re)open a window
-      let w = null; try { w = window.open(AI_BASE + '/call?o=' + encodeURIComponent(location.origin), 'doorboss_video', 'width=1180,height=820'); } catch (e) {}
-      if (!w) { V.msg = 'The window was blocked. Allow pop-ups for this site in the browser address bar, then tap the button again.'; paint(); return; }
+      let w = null; try { w = dock(); } catch (e) {}
+      if (!w) { try { w = window.open(AI_BASE + '/call?o=' + encodeURIComponent(location.origin), 'doorboss_video', 'width=1180,height=820'); } catch (e) {} }   /* fallback: the old pop-out */
+      if (!w) { V.msg = 'The call panel could not open. Reload this page and tap the button again.'; paint(); return; }
       V.win = w; V.s = null; V.msg = ''; V.lastConsent = null; clearInterval(V.poll);
       V.poll = setInterval(() => {
-        if (V.win && V.win.closed) { const last = V.last; resetWin(alive(last) ? '' : 'The call window was closed.'); if (alive(last)) V.lost = last; paint(); return; }
+        if (V.win && !winOpen()) { const last = V.last; resetWin(alive(last) ? '' : 'The call panel was closed.'); if (alive(last)) V.lost = last; paint(); return; }
         try {   /* v38: when the presentation is open in its own window, tell the call window so it offers "Share slides" (the homeowner on video sees the deck) */
           const pw = CW.present && CW.present.state && CW.present.state.win; const open = !!(pw && !pw.closed);
           if (open !== !!V.slidesOpen) { V.slidesOpen = open; post({ type: 'slides', open }); paint(); }
         } catch (e) {}
       }, 1500); paint();
     }
-    function endCall(quiet) { V.lost = null; V.last = null; setTimeout(() => { V.recsFor = null; paint(); }, 150000); post({ type: 'end' }); try { if (V.win && !V.win.closed) setTimeout(() => { try { V.win && V.win.close(); } catch (e) {} }, 700); } catch (e) {} resetWin(quiet ? '' : 'Call ended.'); if (!quiet) paint(); }
+    function endCall(quiet) { V.lost = null; V.last = null; setTimeout(() => { V.recsFor = null; paint(); }, 150000); post({ type: 'end' }); try { if (V.win && !V.frame && !V.win.closed) setTimeout(() => { try { V.win && V.win.close(); } catch (e) {} }, 700); } catch (e) {} setTimeout(() => { undock(); paint(); }, 700); resetWin(quiet ? '' : 'Call ended.', true);   /* the panel gets 700 ms to act on 'end' (leave the room, delete it) before it is removed */ if (!quiet) paint(); }
     function apply(k, v) {   // an accepted suggestion goes into the case file (the manager tapped Use); < > are stripped so no markup ever reaches the notes / GHL
       if (!LABEL[k]) return; const C = CW.api.state(); if (!C) return; if (typeof v === 'string') v = v.replace(/[<>]/g, '').trim(); V.ai[k] = { value: v }; const map = { monthly_payment: 'actual', promised_monthly: 'promised', lender: 'lender' };
       if (map[k]) CW.api.setThey(map[k], String(v));
@@ -3129,17 +3138,17 @@ window.CW_DECKS = [
         }
         else if (m.type === 'state') { V.s = { status: str(m.status, 12), msg: str(m.msg, 200), link: str(m.link, 400), remote: !!m.remote, txOn: !!m.txOn, aiMsg: str(m.aiMsg, 200), lines: (Array.isArray(m.lines) ? m.lines : []).slice(-8).map(l => ({ who: l && l.who === 'REP' ? 'REP' : 'HOMEOWNER', text: str(l && l.text, 600) })), sugs: (Array.isArray(m.sugs) ? m.sugs : []).filter(s => s && LABEL[s.k]).slice(0, 19).map(s => ({ k: s.k, v: typeof s.v === 'number' || typeof s.v === 'boolean' ? s.v : str(s.v, 120), e: str(s.e, 160) })) }; paint(); }
         else if (m.type === 'apply') { apply(str(m.k, 30), typeof m.v === 'number' || typeof m.v === 'boolean' ? m.v : str(m.v, 120)); paint(); }
-        else if (m.type === 'ended') { const last = V.last, closed = m.by === 'closed'; resetWin(closed && alive(last) ? '' : (m.by === 'gone' ? 'That call had already ended.' : 'Call ended.')); V.lost = closed && alive(last) ? last : null; if (!V.lost) V.last = null; paint(); }
+        else if (m.type === 'ended') { const last = V.last, closed = m.by === 'closed'; resetWin(closed && alive(last) ? '' : (m.by === 'gone' ? 'That call had already ended.' : 'Call ended.'), true); V.lost = closed && alive(last) ? last : null; if (!V.lost) V.last = null; paint(); setTimeout(() => { undock(); paint(); }, closed ? 0 : 2500); }   /* the docked panel stays 2.5 s so its own message can be read */
       } catch (err) { console.warn('call window message', err); }
     });
 
-    const CSS = '.vc-tx{max-height:150px;overflow:auto;background:#f4f6f8;border-radius:8px;padding:8px;font-size:13px;margin-top:6px}.vc-tx div{margin:2px 0}.vc-tx b{color:#46525e}.vc-sug{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border:1px solid #dfe5ea;border-radius:10px;margin-top:6px}.vc-sug small{display:block;color:#5a6773}.vc-sug .btn{min-height:44px}.vc-msg{margin:6px 0;padding:8px;border-radius:8px;background:#fff4ee;color:#8a3c0f;font-size:13px}.vc-ok{color:#0b7a68;font-weight:700;font-size:13px}';
+    const CSS = '.vc-tx{max-height:150px;overflow:auto;background:#f4f6f8;border-radius:8px;padding:8px;font-size:13px;margin-top:6px}.vc-tx div{margin:2px 0}.vc-tx b{color:#46525e}.vc-sug{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border:1px solid #dfe5ea;border-radius:10px;margin-top:6px}.vc-sug small{display:block;color:#5a6773}.vc-sug .btn{min-height:44px}.vc-msg{margin:6px 0;padding:8px;border-radius:8px;background:#fff4ee;color:#8a3c0f;font-size:13px}.vc-ok{color:#0b7a68;font-weight:700;font-size:13px}#vcFrame{position:fixed;z-index:2147483000;border:0;background:#0b141d;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 8px 30px rgba(0,0,0,.35)}@media (min-width:1000px){#vcFrame{top:0;right:0;width:440px;height:100vh;height:100dvh}html.vc-docked #cwRoot{padding-right:448px}}@media (max-width:999px){#vcFrame{top:0;left:0;width:100%;height:46vh;height:46dvh}html.vc-docked #cwRoot{padding-top:46vh;padding-top:46dvh}html.vc-docked .cw-top{top:46vh;top:46dvh}}';
     function body() {
       const C = CW.api.state(), consent = !!(C && C.consent.rec), s = V.s;
-      if (V.win && !V.win.closed) {
-        const status = !s ? (V.inperson ? 'Opening the recording window…' : 'Opening the call window…') : V.inperson ? (s.status === 'live' ? (s.recOn ? 'Recording in person (both voices, this device)' : 'Starting the in-person recording…') : s.status === 'starting' ? 'Getting ready…' : s.status === 'prompt' ? 'Type the team call code in the window.' : s.status === 'fatal' ? 'The recording could not start.' : 'Working…') : s.status === 'live' ? (s.remote ? 'Homeowner is on the call' : 'Waiting for the homeowner to join…') : s.status === 'starting' ? 'Creating a private room…' : s.status === 'prompt' ? 'Type the team call code in the call window.' : s.status === 'fatal' ? 'The call window could not start the call.' : 'Working…';
+      if (winOpen()) {
+        const status = !s ? (V.inperson ? 'Opening the recording…' : 'Opening the call…') : V.inperson ? (s.status === 'live' ? (s.recOn ? 'Recording in person (both voices, this device)' : 'Starting the in-person recording…') : s.status === 'starting' ? 'Getting ready…' : s.status === 'prompt' ? 'Type the team call code in the window.' : s.status === 'fatal' ? 'The recording could not start.' : 'Working…') : s.status === 'live' ? (s.remote ? 'Homeowner is on the call' : 'Waiting for the homeowner to join…') : s.status === 'starting' ? 'Creating a private room…' : s.status === 'prompt' ? 'Type the team call code in the call window.' : s.status === 'fatal' ? 'The call window could not start the call.' : 'Working…';
         return '<div class="cw-priv"><b>' + esc(status) + '</b></div>' + (s && s.msg ? '<div class="vc-msg">' + esc(s.msg) + '</div>' : '') +
-          '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn sm" data-vc="show">Show call window</button><button type="button" class="btn sm danger" data-vc="leave">' + (V.armEnd && Date.now() - V.armEnd < 4000 ? 'Tap again to end the call' : 'End call') + '</button></div>' +
+          '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn sm" data-vc="show">Show the call</button><button type="button" class="btn sm danger" data-vc="leave">' + (V.armEnd && Date.now() - V.armEnd < 4000 ? 'Tap again to end the call' : 'End call') + '</button></div>' +
           (s && s.link && !V.inperson ? '<div class="cw-priv" style="margin-top:8px">Homeowner link (you send it; nothing is sent for you)</div><div class="row" style="gap:6px"><input class="cw-in" id="vcLink" readonly value="' + esc(s.link) + '" aria-label="Homeowner link"><button type="button" class="btn sm" data-vc="copy">Copy</button><button type="button" class="btn sm" data-vc="text">Text</button></div>' : '') +
           '<div style="margin-top:8px">' + (consent ? (s && s.txOn ? '<span class="vc-ok">✓ Live transcript on (they agreed to record)</span>' : '<span class="cw-priv">Starting the live transcript…</span>') : '<span class="cw-priv">Tick <b>record</b> above once they say OK. The live transcript and AI start only then.</span>') + '</div>' +
           (s && s.aiMsg ? '<div class="vc-msg">' + esc(s.aiMsg) + '</div>' : '') +
@@ -3168,7 +3177,7 @@ window.CW_DECKS = [
           const r = V.lost; V.lost = null; V.last = null; V.msg = 'Call ended.'; paint();
           if (r && r.room) { try { fetch(AI_BASE + '/room/end', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok() }, body: JSON.stringify({ room_name: r.room }) }).catch(() => {}); } catch (x) {} }
         }
-        else if (a === 'show') { try { V.win && V.win.focus(); } catch (x) {} }
+        else if (a === 'show') { try { if (V.frame) V.frame.scrollIntoView({ behavior: 'smooth', block: 'start' }); else V.win && V.win.focus(); } catch (x) {} }
         else if (a === 'leave') {   // two taps: one stray tap must not hang up on the homeowner
           if (V.armEnd && Date.now() - V.armEnd < 4000) { V.armEnd = 0; endCall(false); }
           else { V.armEnd = Date.now(); paint(); setTimeout(() => { if (V.armEnd && Date.now() - V.armEnd >= 4000) { V.armEnd = 0; paint(); } }, 4100); }
