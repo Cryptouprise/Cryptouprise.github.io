@@ -3025,7 +3025,7 @@ window.CW_DECKS = [
     const AI_ORIGIN = (() => { try { return new URL(AI_BASE).origin; } catch (e) { return AI_BASE; } })();
     const LABEL = { installer: 'Installer', installer_status: 'Installer status', financing: 'Financing', lender: 'Lender', loan_amount: 'Loan amount', loan_balance: 'Loan balance', monthly_payment: 'Pays now / month', promised_monthly: 'Told / month', interest_rate: 'Interest rate %', loan_term_years: 'Loan term (years)', system_size_kw: 'System size (kW)', year_installed: 'Year installed', has_battery: 'Has battery', system_working: 'System working', promise_in_writing: 'Promise in writing', contacted_installer: 'Contacted installer', contacted_lender: 'Contacted lender', other_signer: 'Other signer', main_issue: 'Main issue' };
     const MONEY = new Set(['loan_amount', 'loan_balance', 'monthly_payment', 'promised_monthly']);
-    const V = { win: null, s: null, msg: '', lastConsent: null, ai: {}, poll: null, armEnd: 0, html: ['', '', ''], last: null, lost: null, rejoin: '' };
+    const V = { win: null, s: null, msg: '', lastConsent: null, ai: {}, poll: null, armEnd: 0, html: ['', '', ''], last: null, lost: null, rejoin: '', inperson: false };   /* inperson (10/21, Charles: "Live in-person record"): same window, same AI, the rep's mic hears both people */
     // v45 (Charles 10/19: "no place to go back in the app and reopen my meeting ... the homeowner was still on"): the open room is remembered so the rep can REJOIN it
     const alive = r => !!(r && r.room && (!r.exp || r.exp * 1000 > Date.now() + 30000));
     const tok = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
@@ -3058,11 +3058,11 @@ window.CW_DECKS = [
       } catch (e) { if (w) w.close(); }
     }
     function resetWin(msg) { clearInterval(V.poll); V.poll = null; V.win = null; V.s = null; V.lastConsent = null; V.msg = msg || ''; }
-    function start(rejoinRoom) {
+    function start(rejoinRoom, mode) {
       if (V.win && !V.win.closed) { try { V.win.focus(); } catch (e) {} return; }
-      V.rejoin = rejoinRoom || ''; V.lost = null; if (!rejoinRoom) V.last = null;   // the "still open" note is cleared once we (re)open a window
+      V.rejoin = rejoinRoom || ''; V.lost = null; if (!rejoinRoom) { V.last = null; V.inperson = mode === 'inperson'; }   // the "still open" note is cleared once we (re)open a window
       let w = null; try { w = window.open(AI_BASE + '/call?o=' + encodeURIComponent(location.origin), 'doorboss_video', 'width=1180,height=820'); } catch (e) {}
-      if (!w) { V.msg = 'The call window was blocked. Allow pop-ups for this site in the browser address bar, then tap Start again.'; paint(); return; }
+      if (!w) { V.msg = 'The window was blocked. Allow pop-ups for this site in the browser address bar, then tap the button again.'; paint(); return; }
       V.win = w; V.s = null; V.msg = ''; V.lastConsent = null; clearInterval(V.poll);
       V.poll = setInterval(() => {
         if (V.win && V.win.closed) { const last = V.last; resetWin(alive(last) ? '' : 'The call window was closed.'); if (alive(last)) V.lost = last; paint(); return; }
@@ -3112,12 +3112,13 @@ window.CW_DECKS = [
       for (const item of q.slice()) { try { await sendBack(item.body); q = q.filter(x => x !== item); qsave(q); } catch (e) { if (e && (e.status === 400 || e.status === 403 || e.status === 404)) { q = q.filter(x => x !== item); qsave(q); } else break; } }
     }
     if (Array.isArray(CW.hooks.onFinish)) CW.hooks.onFinish.push(writeBack);
+    window.CWV = { start: mode => start('', mode) };   // the deep link /doors?call=<intake>&mode=inperson starts the in-person recording as soon as the workspace is open
     window.addEventListener('online', () => setTimeout(retryQueue, 2000)); setTimeout(retryQueue, 6000);
     V.retryQueue = retryQueue;
     window.addEventListener('message', e => {
       if (!V.win || e.source !== V.win || e.origin !== AI_ORIGIN) return; const m = e.data || {};
       try {
-        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined, property_id: (C && C.id && !/^intake:/.test(C.id)) ? C.id : undefined, intake_id: (C && C.id && /^intake:/.test(C.id)) ? C.id.slice(7) : undefined }); }   // the manager's own sign-in unlocks the call window: nothing to type
+        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined, property_id: (C && C.id && !/^intake:/.test(C.id)) ? C.id : undefined, intake_id: (C && C.id && /^intake:/.test(C.id)) ? C.id.slice(7) : undefined, inperson: !!V.inperson }); }   // the manager's own sign-in unlocks the call window: nothing to type
         else if (m.type === 'state' && /^db-[0-9a-f]{10}$/.test(String(m.room || '')) && !V.last) { V.last = { room: String(m.room), exp: +m.exp || 0 }; V.lost = null; }
         if (m.type === 'consent') {   // the Record button in the call window: tick DoorBoss's own "record" switch (same path as tapping it here)
           const C = CW.api.state(); V.lastConsent = !!m.rec;
@@ -3133,10 +3134,10 @@ window.CW_DECKS = [
     function body() {
       const C = CW.api.state(), consent = !!(C && C.consent.rec), s = V.s;
       if (V.win && !V.win.closed) {
-        const status = !s ? 'Opening the call window…' : s.status === 'live' ? (s.remote ? 'Homeowner is on the call' : 'Waiting for the homeowner to join…') : s.status === 'starting' ? 'Creating a private room…' : s.status === 'prompt' ? 'Type the team call code in the call window.' : s.status === 'fatal' ? 'The call window could not start the call.' : 'Working…';
+        const status = !s ? (V.inperson ? 'Opening the recording window…' : 'Opening the call window…') : V.inperson ? (s.status === 'live' ? (s.recOn ? 'Recording in person (both voices, this device)' : 'Starting the in-person recording…') : s.status === 'starting' ? 'Getting ready…' : s.status === 'prompt' ? 'Type the team call code in the window.' : s.status === 'fatal' ? 'The recording could not start.' : 'Working…') : s.status === 'live' ? (s.remote ? 'Homeowner is on the call' : 'Waiting for the homeowner to join…') : s.status === 'starting' ? 'Creating a private room…' : s.status === 'prompt' ? 'Type the team call code in the call window.' : s.status === 'fatal' ? 'The call window could not start the call.' : 'Working…';
         return '<div class="cw-priv"><b>' + esc(status) + '</b></div>' + (s && s.msg ? '<div class="vc-msg">' + esc(s.msg) + '</div>' : '') +
           '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn sm" data-vc="show">Show call window</button><button type="button" class="btn sm danger" data-vc="leave">' + (V.armEnd && Date.now() - V.armEnd < 4000 ? 'Tap again to end the call' : 'End call') + '</button></div>' +
-          (s && s.link ? '<div class="cw-priv" style="margin-top:8px">Homeowner link (you send it; nothing is sent for you)</div><div class="row" style="gap:6px"><input class="cw-in" id="vcLink" readonly value="' + esc(s.link) + '" aria-label="Homeowner link"><button type="button" class="btn sm" data-vc="copy">Copy</button><button type="button" class="btn sm" data-vc="text">Text</button></div>' : '') +
+          (s && s.link && !V.inperson ? '<div class="cw-priv" style="margin-top:8px">Homeowner link (you send it; nothing is sent for you)</div><div class="row" style="gap:6px"><input class="cw-in" id="vcLink" readonly value="' + esc(s.link) + '" aria-label="Homeowner link"><button type="button" class="btn sm" data-vc="copy">Copy</button><button type="button" class="btn sm" data-vc="text">Text</button></div>' : '') +
           '<div style="margin-top:8px">' + (consent ? (s && s.txOn ? '<span class="vc-ok">✓ Live transcript on (they agreed to record)</span>' : '<span class="cw-priv">Starting the live transcript…</span>') : '<span class="cw-priv">Tick <b>record</b> above once they say OK. The live transcript and AI start only then.</span>') + '</div>' +
           (s && s.aiMsg ? '<div class="vc-msg">' + esc(s.aiMsg) + '</div>' : '') +
           (V.slidesOpen && s && s.status === 'live' ? '<div class="vc-ok" style="margin-top:6px">Slides are open in their own window: in the call window tap <b>Share slides</b> and pick that window so the homeowner sees them.</div>' : '') +
@@ -3144,7 +3145,7 @@ window.CW_DECKS = [
           '\u0001' + (s && s.sugs.length ?'<div class="cw-priv" style="margin-top:8px">The AI heard (tap Use to put it in the case file)</div>' + s.sugs.map(x => '<div class="vc-sug"><div><b>' + esc(LABEL[x.k]) + ':</b> ' + esc(MONEY.has(x.k) && typeof x.v === 'number' ? '$' + x.v.toLocaleString('en-US') : String(x.v)) + '<small>they said: "' + esc(x.e) + '"</small></div><div class="row" style="gap:4px"><button type="button" class="btn sm primary" data-vc="use" data-k="' + esc(x.k) + '">Use</button><button type="button" class="btn sm" data-vc="no" data-k="' + esc(x.k) + '">No</button></div></div>').join('') : '');
       }
       if (alive(V.lost)) return '<div class="vc-msg"><b>Your call is still open.</b> The homeowner may still be on.</div><div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn primary" data-vc="rejoin">↩ Rejoin call</button><button type="button" class="btn sm danger" data-vc="endlost">End call for everyone</button><button type="button" class="btn sm" data-vc="start">Start a new call</button></div>';
-      return (V.msg ? '<div class="vc-msg">' + esc(V.msg) + '</div>' : '') + '<button type="button" class="btn primary" data-vc="start">📹 Start video call</button><div class="cw-priv" style="margin-top:6px">Opens a call window with a private room. You send the homeowner the link. Nothing records until they say OK.</div>' + recsHtml();
+      return (V.msg ? '<div class="vc-msg">' + esc(V.msg) + '</div>' : '') + '<button type="button" class="btn primary" data-vc="start">📹 Start video call</button> <button type="button" class="btn" data-vc="inperson" title="You are with the homeowner: this device records both of you, with the live transcript, coach and AI notes">🎙 Live in-person record</button><div class="cw-priv" style="margin-top:6px"><b>Live in-person record</b>: you are at the door or the kitchen table; this phone records both of you (tell them it is being recorded), the live transcript, coach and AI notes run the same way, and the recording + transcript land on the intake of that client. </div><div class="cw-priv" style="margin-top:6px">Opens a call window with a private room. You send the homeowner the link. Nothing records until they say OK.</div>' + recsHtml();
     }
     // three parts (status+buttons / transcript / AI suggestions), each rewritten only when its own HTML changed, so a new transcript line never swaps the Use/No buttons out from under a tap
     function paint() {
@@ -3157,6 +3158,7 @@ window.CW_DECKS = [
       const b = e.target.closest('[data-vc]'); if (!b) return; const a = b.dataset.vc;
       try {
         if (a === 'start') start();
+        else if (a === 'inperson') start('', 'inperson');
         else if (a === 'play') playRec(b.dataset.rid);
         else if (a === 'rejoin') { if (alive(V.lost)) start(V.lost.room); else { V.lost = null; paint(); } }
         else if (a === 'endlost') {   // the window is gone but the room is open: end it for everyone from here
@@ -3533,7 +3535,7 @@ window.CW_DECKS = [
    Only known tab names are accepted; anything else is ignored. Never write literal closing tags in this file (the preview host injects at the first one). */
 (function () {
   try {
-    const q = new URLSearchParams(location.search), view = String(q.get('view') || ''), sub = String(q.get('sub') || ''), call = String(q.get('call') || '');
+    const q = new URLSearchParams(location.search), view = String(q.get('view') || ''), sub = String(q.get('sub') || ''), call = String(q.get('call') || ''), mode = String(q.get('mode') || '');
     // v48 (10/21, Charles: "the same exact thing we created in the door-to-door app"): /doors?call=<intake id> opens the full call workspace
     // (stages, questions, Live coach, case file, documents, slides, video) for the intake's client. The client becomes a virtual house
     // (id intake:<id>) so every workspace piece works; the after-call writer updates THAT intake; finishing returns to the intake page.
@@ -3556,6 +3558,7 @@ window.CW_DECKS = [
               status: 'unknocked', territory_id: null, lat: null, lng: null, created_at: Date.now() });
           }
           window.CW.open(vid);
+          if (mode === 'inperson') { let k2 = 0; const t3 = setInterval(() => { k2++; try { if (window.CWV) { clearInterval(t3); window.CWV.start('inperson'); } else if (k2 > 40) clearInterval(t3); } catch (e) { clearInterval(t3); } }, 250); }   // 10/21: "Live in-person record" from the intake page
         } catch (e) { clearInterval(t2); try { toast('Could not open the call for this intake: ' + String(e && e.message || e).slice(0, 80)); } catch (e2) {} }
       }, 500);
       return;
