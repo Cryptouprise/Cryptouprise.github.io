@@ -142,7 +142,7 @@ main{flex:1;min-height:0;position:relative}
 .next-card .body{flex:1;min-width:0}
 .next-card .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .next-card .s{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.next-card .go{height:34px;padding:0 12px;border-radius:8px;background:var(--accent);color:var(--accent-fg);font-weight:600;flex:none}
+.next-card .go{height:34px;padding:0 12px;border-radius:8px;background:var(--accent);color:var(--accent-fg);font-weight:600;flex:none}.next-card .skip{height:34px;min-width:34px;padding:0 8px;border-radius:8px;background:transparent;color:var(--muted,#9aa6b2);border:1px solid rgba(255,255,255,.18);font-size:16px;flex:none;margin-left:6px}
 .map-note{position:absolute;left:max(12px,env(safe-area-inset-left,0px));top:54px;z-index:900;font-size:11px;color:var(--muted);background:var(--surface);border:1px solid var(--line);padding:3px 8px;border-radius:6px}
 .draw-bar{position:absolute;left:max(10px,env(safe-area-inset-left,0px));right:max(10px,env(safe-area-inset-right,0px));top:10px;z-index:950;background:var(--fg);color:var(--bg);border-radius:var(--radius);padding:10px 12px;display:flex;align-items:center;gap:8px;box-shadow:var(--shadow)}
 .draw-bar .t{flex:1;font-weight:600;font-size:14px}
@@ -388,7 +388,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
       <div class="next-card" id="nextCard" hidden>
         <span class="sw" id="nextSw"></span>
         <div class="body"><div class="t" id="nextT"></div><div class="s" id="nextS"></div></div>
-        <button class="go" id="nextGo">Open</button>
+        <button class="go" id="nextGo">Open</button><button class="skip" id="nextSkip" title="Not this one: show the next house" aria-label="Skip this house">✕</button>
       </div>
     </section>
 
@@ -1120,6 +1120,8 @@ function initMap(){
   map.on('zoomend', () => { A._zr = Date.now(); renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
   map.on('moveend', () => { if (A._zr && Date.now() - A._zr < 400) return; if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); });   // v21: a zoom already redrew
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
+  /* v22.7 (10/22, Charles: a rep could not get the suggested house off the screen): ✕ skips it for the rest of the day and shows the next one */
+  $('#nextSkip').onclick = () => { if (!A.nextId) return; const sk = skipLoad(); sk[A.nextId] = Date.now(); try { localStorage.setItem('doorboss.skipnext.v1', JSON.stringify(sk)); } catch(e){} A.nextId = null; updateNext(); toast($('#nextCard').hidden ? 'No more houses to suggest right now' : 'Skipped for today'); };
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
 function setBasemap(b){
@@ -1254,11 +1256,12 @@ async function showTrail(userId, dayT){
   toast(`${u.name} · ${pts.length} points · ${fmtTime(pts[0].at)}–${fmtTime(pts[pts.length-1].at)} · tap map to clear`);
   A.map.once('click', () => { if (A.trailLayer){ A.map.removeLayer(A.trailLayer); A.trailLayer=null; } });
 }
+function skipLoad(){ try { const o = JSON.parse(localStorage.getItem('doorboss.skipnext.v1') || '{}'); const t = Date.now(); for (const k in o) if (t - o[k] > 14*3600000) delete o[k]; return o; } catch(e){ return {}; } }   /* v22.7: houses the rep skipped with ✕, forgotten after 14 h */
 function updateNext(){
-  const card=$('#nextCard');
+  const card=$('#nextCard'); const skipped = skipLoad();
   if (A.route){ showNextRouteCard(); return; }
   if (!A.myPos || A.draw){ card.hidden=true; A.nextId=null; return; }
-  const cand = A.props.filter(p => (!A.mine ? true : inMyTerr(p)) && p.status!=='do_not_knock');
+  const cand = A.props.filter(p => (!A.mine ? true : inMyTerr(p)) && p.status!=='do_not_knock' && !skipped[p.id]);
   const due = cand.filter(p => p.status==='callback' && p.callback_at && p.callback_at <= now()+30*60000);
   let pickP=null, why='';
   const nearest = arr => { let best=null, bd=Infinity; for (const p of arr){ const d=haversine(A.myPos,[p.lat,p.lng]); if (d<bd){ bd=d; best=p; } } return best ? {p:best, d:bd} : undefined; };
@@ -2306,7 +2309,7 @@ if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude
   .next-card{right:calc(84px + env(safe-area-inset-right,0px));bottom:calc(96px + env(safe-area-inset-bottom,0px));padding:12px 14px}
   .next-card .t{font-size:16px}
   .next-card .s{font-size:13px}
-  .next-card .go{height:44px;padding:0 16px;font-size:15px}
+  .next-card .go{height:44px;padding:0 16px;font-size:15px} .next-card .skip{height:44px;min-width:44px}
   .status-grid{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
   .sbtn{height:70px;font-size:13.5px;gap:6px;border-radius:12px}
   .sbtn .sw{width:18px;height:18px}
