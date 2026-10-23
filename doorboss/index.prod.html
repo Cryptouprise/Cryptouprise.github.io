@@ -3039,6 +3039,12 @@ window.CW_DECKS = [
     const tok = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
     const str = (x, n) => String(x === null || x === undefined ? '' : x).replace(/[\u0000-\u0008\u000b-\u001f]/g, '').slice(0, n);   // control chars (incl. the card's part separator) never get through; display is escaped anyway
     const post = m => { try { if (V.win && !V.win.closed) V.win.postMessage(m, AI_ORIGIN); } catch (e) {} };
+    /* v56 (Charles 10/23: "if you accidentally hit the back button ... very difficult to come back into the call"): the open call is remembered on this
+       phone so Back, a reload or closing the client screen never loses it. Same key on the intake page (same site), so either page offers Rejoin. */
+    const ACT = 'esr.activeCall.v1';
+    const actLoad = () => { try { const r = JSON.parse(localStorage.getItem(ACT) || 'null'); return r && /^db-[0-9a-f]{10}$/.test(String(r.room || '')) ? r : null; } catch (e) { return null; } };
+    const actSave = r => { try { if (r) localStorage.setItem(ACT, JSON.stringify(r)); else localStorage.removeItem(ACT); } catch (e) {} };
+    function actRemember() { if (!V.last || !alive(V.last)) return; const cid = String(V.cid || ''); actSave({ room: V.last.room, exp: V.last.exp, inperson: !!V.inperson, cid: cid, intake: /^intake:/.test(cid) ? cid.slice(7) : '', consent: !!V.lastConsent, client: V.client || '', at: Date.now(), src: 'doors' }); }
 
     // v46 (Charles 10/20: "of course we want the damn recordings kept"): recordings are kept on the server; list this house's and play them
     function recsHtml() {
@@ -3074,7 +3080,9 @@ window.CW_DECKS = [
     function resetWin(msg, keepFrame) { clearInterval(V.poll); V.poll = null; V.win = null; V.s = null; V.lastConsent = null; V.msg = msg || ''; if (!keepFrame) undock(); }
     function start(rejoinRoom, mode) {
       if (winOpen()) { try { if (V.frame) V.frame.scrollIntoView({ block: 'nearest' }); else V.win.focus(); } catch (e) {} return; }
-      V.rejoin = rejoinRoom || ''; V.lost = null; if (!rejoinRoom) { V.last = null; V.inperson = mode === 'inperson'; }   // the "still open" note is cleared once we (re)open a window
+      V.rejoin = rejoinRoom || ''; V.lost = null; if (!rejoinRoom) { V.last = null; V.inperson = mode === 'inperson'; }
+      if (!rejoinRoom) { try { const C0 = CW.api.state(); const p0 = CW.api.prop ? CW.api.prop() : null; V.cid = (C0 && C0.id) || ''; V.client = str(p0 && p0.owner_name, 60); actSave(null);
+        if (V.inperson && C0 && !C0.live) { const sb = document.querySelector('[data-cw="start"]'); if (sb) sb.click(); } } catch (e) {} }   /* v56: in person = the call has started (the top shows Live, not "Start call") */   // the "still open" note is cleared once we (re)open a window
       let w = null; try { w = dock(); } catch (e) {}
       if (!w) { try { w = window.open(AI_BASE + '/call?o=' + encodeURIComponent(location.origin), 'doorboss_video', 'width=1180,height=820'); } catch (e) {} }   /* fallback: the old pop-out */
       if (!w) { V.msg = 'The call panel could not open. Reload this page and tap the button again.'; paint(); return; }
@@ -3087,7 +3095,7 @@ window.CW_DECKS = [
         } catch (e) {}
       }, 1500); paint();
     }
-    function endCall(quiet) { V.lost = null; V.last = null; setTimeout(() => { V.recsFor = null; paint(); }, 150000); post({ type: 'end' }); try { if (V.win && !V.frame && !V.win.closed) setTimeout(() => { try { V.win && V.win.close(); } catch (e) {} }, 700); } catch (e) {} setTimeout(() => { undock(); paint(); }, 700); resetWin(quiet ? '' : 'Call ended.', true);   /* the panel gets 700 ms to act on 'end' (leave the room, delete it) before it is removed */ if (!quiet) paint(); }
+    function endCall(quiet) { actSave(null); V.lost = null; V.last = null; setTimeout(() => { V.recsFor = null; paint(); }, 150000); post({ type: 'end' }); try { if (V.win && !V.frame && !V.win.closed) setTimeout(() => { try { V.win && V.win.close(); } catch (e) {} }, 700); } catch (e) {} setTimeout(() => { undock(); paint(); }, 700); resetWin(quiet ? '' : 'Call ended.', true);   /* the panel gets 700 ms to act on 'end' (leave the room, delete it) before it is removed */ if (!quiet) paint(); }
     function apply(k, v) {   // an accepted suggestion goes into the case file (the manager tapped Use); < > are stripped so no markup ever reaches the notes / GHL
       if (!LABEL[k]) return; const C = CW.api.state(); if (!C) return; if (typeof v === 'string') v = v.replace(/[<>]/g, '').trim(); V.ai[k] = { value: v }; const map = { monthly_payment: 'actual', promised_monthly: 'promised', lender: 'lender' };
       if (map[k]) CW.api.setThey(map[k], String(v));
@@ -3133,24 +3141,25 @@ window.CW_DECKS = [
     window.addEventListener('message', e => {
       if (!V.win || e.source !== V.win || e.origin !== AI_ORIGIN) return; const m = e.data || {};
       try {
-        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = !!(C && C.consent.rec); post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined, property_id: (C && C.id && !/^intake:/.test(C.id)) ? C.id : undefined, intake_id: (C && C.id && /^intake:/.test(C.id)) ? C.id.slice(7) : undefined, inperson: !!V.inperson }); }   // the manager's own sign-in unlocks the call window: nothing to type
-        else if (m.type === 'state' && /^db-[0-9a-f]{10}$/.test(String(m.room || '')) && !V.last) { V.last = { room: String(m.room), exp: +m.exp || 0 }; V.lost = null; }
+        if (m.type === 'ready') { const C = CW.api.state(); V.lastConsent = C ? !!C.consent.rec : !!V.rejoinConsent; post({ type: 'init', name: str((typeof A !== "undefined" && A && A.me && A.me.name), 40) || 'Rep', consent: V.lastConsent, token: tok(), rejoin: V.rejoin || undefined, property_id: (C && C.id && !/^intake:/.test(C.id)) ? C.id : undefined, intake_id: (C && C.id && /^intake:/.test(C.id)) ? C.id.slice(7) : undefined, inperson: !!V.inperson }); }   // the manager's own sign-in unlocks the call window: nothing to type
+        else if (m.type === 'state' && /^db-[0-9a-f]{10}$/.test(String(m.room || '')) && !V.last) { V.last = { room: String(m.room), exp: +m.exp || 0 }; V.lost = null; actRemember(); }
         if (m.type === 'consent') {   // the Record button in the call window: tick DoorBoss's own "record" switch (same path as tapping it here)
-          const C = CW.api.state(); V.lastConsent = !!m.rec;
+          const C = CW.api.state(); V.lastConsent = !!m.rec; actRemember();
           if (C && !!C.consent.rec !== !!m.rec) { const b = document.querySelector('[data-cw="consent"][data-k="rec"]'); if (b) b.click(); else C.consent.rec = !!m.rec; }
         }
         else if (m.type === 'state') { V.s = { status: str(m.status, 12), msg: str(m.msg, 200), link: str(m.link, 400), remote: !!m.remote, txOn: !!m.txOn, aiMsg: str(m.aiMsg, 200), lines: (Array.isArray(m.lines) ? m.lines : []).slice(-8).map(l => ({ who: l && l.who === 'REP' ? 'REP' : 'HOMEOWNER', text: str(l && l.text, 600) })), sugs: (Array.isArray(m.sugs) ? m.sugs : []).filter(s => s && LABEL[s.k]).slice(0, 19).map(s => ({ k: s.k, v: typeof s.v === 'number' || typeof s.v === 'boolean' ? s.v : str(s.v, 120), e: str(s.e, 160) })) }; paint(); }
         else if (m.type === 'apply') { apply(str(m.k, 30), typeof m.v === 'number' || typeof m.v === 'boolean' ? m.v : str(m.v, 120)); paint(); }
-        else if (m.type === 'ended') { const last = V.last, closed = m.by === 'closed'; resetWin(closed && alive(last) ? '' : (m.by === 'gone' ? 'That call had already ended.' : 'Call ended.'), true); V.lost = closed && alive(last) ? last : null; if (!V.lost) V.last = null; paint(); setTimeout(() => { undock(); paint(); }, closed ? 0 : 2500); }   /* the docked panel stays 2.5 s so its own message can be read */
+        else if (m.type === 'ended') { const last = V.last, closed = m.by === 'closed'; resetWin(closed && alive(last) ? '' : (m.by === 'gone' ? 'That call had already ended.' : 'Call ended.'), true); V.lost = closed && alive(last) ? last : null; if (!V.lost) { V.last = null; actSave(null); } else actRemember(); paint(); setTimeout(() => { undock(); paint(); }, closed ? 0 : 2500); }   /* the docked panel stays 2.5 s so its own message can be read */
       } catch (err) { console.warn('call window message', err); }
     });
 
-    const CSS = '.vc-tx{max-height:150px;overflow:auto;background:#f4f6f8;border-radius:8px;padding:8px;font-size:13px;margin-top:6px}.vc-tx div{margin:2px 0}.vc-tx b{color:#46525e}.vc-sug{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border:1px solid #dfe5ea;border-radius:10px;margin-top:6px}.vc-sug small{display:block;color:#5a6773}.vc-sug .btn{min-height:44px}.vc-msg{margin:6px 0;padding:8px;border-radius:8px;background:#fff4ee;color:#8a3c0f;font-size:13px}.vc-ok{color:#0b7a68;font-weight:700;font-size:13px}#vcFrame{position:fixed;z-index:2147483000;border:0;background:#0b141d;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 8px 30px rgba(0,0,0,.35)}@media (min-width:1000px){#vcFrame{top:0;right:0;width:440px;height:100vh;height:100dvh}html.vc-docked #cwRoot{padding-right:448px}}@media (max-width:999px){#vcFrame{top:0;left:0;width:100%;height:46vh;height:46dvh}html.vc-docked #cwRoot{padding-top:46vh;padding-top:46dvh}html.vc-docked .cw-top{top:46vh;top:46dvh}}';
+    const CSS = '.vc-tx{max-height:150px;overflow:auto;background:#f4f6f8;border-radius:8px;padding:8px;font-size:13px;margin-top:6px}.vc-tx div{margin:2px 0}.vc-tx b{color:#46525e}.vc-sug{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:8px;border:1px solid #dfe5ea;border-radius:10px;margin-top:6px}.vc-sug small{display:block;color:#5a6773}.vc-sug .btn{min-height:44px}.vc-msg{margin:6px 0;padding:8px;border-radius:8px;background:#fff4ee;color:#8a3c0f;font-size:13px}.vc-ok{color:#0b7a68;font-weight:700;font-size:13px}#vcFrame{position:fixed;z-index:2147483000;border:0;background:#0b141d;box-shadow:0 0 0 1px rgba(255,255,255,.08),0 8px 30px rgba(0,0,0,.35)}@media (min-width:1000px){#vcFrame{top:0;right:0;width:440px;height:100vh;height:100dvh}html.vc-docked #cwRoot{padding-right:448px}}@media (max-width:999px){#vcFrame{top:0;left:0;width:100%;height:46vh;height:46dvh}html.vc-docked #cwRoot{padding-top:46vh;padding-top:46dvh}html.vc-docked .cw-top{top:46vh;top:46dvh}}#vcBanner{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:2147483001;display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:calc(100% - 24px);background:#12202e;color:#fff;padding:10px 12px;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.35);font-size:14px}#vcBanner .btn{min-height:40px}';
     function body() {
       const C = CW.api.state(), consent = !!(C && C.consent.rec), s = V.s;
       if (winOpen()) {
         const status = !s ? (V.inperson ? 'Opening the recording…' : 'Opening the call…') : V.inperson ? (s.status === 'live' ? (s.recOn ? 'Recording in person (both voices, this device)' : 'Starting the in-person recording…') : s.status === 'starting' ? 'Getting ready…' : s.status === 'prompt' ? 'Type the team call code in the window.' : s.status === 'fatal' ? 'The recording could not start.' : 'Working…') : s.status === 'live' ? (s.remote ? 'Homeowner is on the call' : 'Waiting for the homeowner to join…') : s.status === 'starting' ? 'Creating a private room…' : s.status === 'prompt' ? 'Type the team call code in the call window.' : s.status === 'fatal' ? 'The call window could not start the call.' : 'Working…';
         return '<div class="cw-priv"><b>' + esc(status) + '</b></div>' + (s && s.msg ? '<div class="vc-msg">' + esc(s.msg) + '</div>' : '') +
+          '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px;opacity:.45" title="Only one call or recording at a time"><button type="button" class="btn sm" data-vc="start">📹 Start video call</button><button type="button" class="btn sm" data-vc="inperson">🎙 Live in-person record</button></div>' +
           '<div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn sm" data-vc="show">Show the call</button><button type="button" class="btn sm danger" data-vc="leave">' + (V.armEnd && Date.now() - V.armEnd < 4000 ? 'Tap again to end the call' : 'End call') + '</button></div>' +
           (s && s.link && !V.inperson ? '<div class="cw-priv" style="margin-top:8px">Homeowner link (you send it; nothing is sent for you)</div><div class="row" style="gap:6px"><input class="cw-in" id="vcLink" readonly value="' + esc(s.link) + '" aria-label="Homeowner link"><button type="button" class="btn sm" data-vc="copy">Copy</button><button type="button" class="btn sm" data-vc="text">Text</button></div>' : '') +
           '<div style="margin-top:8px">' + (consent ? (s && s.txOn ? '<span class="vc-ok">✓ Live transcript on (they agreed to record)</span>' : '<span class="cw-priv">Starting the live transcript…</span>') : '<span class="cw-priv">Tick <b>record</b> above once they say OK. The live transcript and AI start only then.</span>') + '</div>' +
@@ -3162,8 +3171,39 @@ window.CW_DECKS = [
       if (alive(V.lost)) return '<div class="vc-msg"><b>Your call is still open.</b> The homeowner may still be on.</div><div class="row" style="gap:6px;flex-wrap:wrap;margin-top:6px"><button type="button" class="btn primary" data-vc="rejoin">↩ Rejoin call</button><button type="button" class="btn sm danger" data-vc="endlost">End call for everyone</button><button type="button" class="btn sm" data-vc="start">Start a new call</button></div>';
       return (V.msg ? '<div class="vc-msg">' + esc(V.msg) + '</div>' : '') + '<button type="button" class="btn primary" data-vc="start">📹 Start video call</button> <button type="button" class="btn" data-vc="inperson" title="You are with the homeowner: this device records both of you, with the live transcript, coach and AI notes">🎙 Live in-person record</button><div class="cw-priv" style="margin-top:6px"><b>Live in-person record</b>: you are at the door or the kitchen table; this phone records both of you (tell them it is being recorded), the live transcript, coach and AI notes run the same way, and the recording + transcript land on the intake of that client. </div><div class="cw-priv" style="margin-top:6px">Opens a call window with a private room. You send the homeowner the link. Nothing records until they say OK.</div>' + recsHtml();
     }
+    function endLost() { const r = V.lost; V.lost = null; V.last = null; actSave(null); V.msg = 'Call ended.'; paint();
+      if (r && r.room) { try { fetch(AI_BASE + '/room/end', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok() }, body: JSON.stringify({ room_name: r.room }) }).catch(() => {}); } catch (x) {} } }
+    /* v56 (Charles 10/23: "you're in an in-person recording, are you sure you want to turn that off? ... only one recording at a time") */
+    function confirmSwitch() {
+      const title = V.inperson ? 'In-person recording is on' : 'A video call is on';
+      const msg = V.inperson ? 'You are in an in-person recording right now. Only one recording can run at a time. Turn the in-person recording off?' : 'A video call is running right now. Only one call can run at a time. End this call?';
+      const go = () => { endCall(false); try { toast(V.inperson ? 'Recording off. Now you can start the other one.' : 'Call ended. Now you can start the other one.'); } catch (e) {} };
+      if (typeof confirmBox === 'function') confirmBox(title, msg, go, V.inperson ? 'Turn it off' : 'End the call'); else if (window.confirm(msg)) go();
+    }
+    /* v56: the bar that follows the rep around DoorBoss while a call is open (client screen closed) or still open after Back / a reload */
+    function banner() {
+      let el = document.getElementById('vcBanner'); const wsOpen = !!CW.api.state(); const live = winOpen(); const lost = !live && alive(V.lost);
+      if (wsOpen || (!live && !lost)) { if (el) el.remove(); return; }
+      if (!el) { el = document.createElement('div'); el.id = 'vcBanner'; el.setAttribute('role', 'status'); document.body.appendChild(el); el.addEventListener('click', onBannerClick); }
+      const who = V.client ? ' with ' + esc(V.client) : '';
+      const h = live ? '<b>' + (V.inperson ? '● Recording in person' : '📞 Call in progress') + who + '</b><button type="button" class="btn sm primary" data-vb="back">Back to the call</button><button type="button" class="btn sm danger" data-vb="end">' + (V.armEnd && Date.now() - V.armEnd < 4000 ? 'Tap again to end' : 'End') + '</button>'
+        : '<b>Your call' + who + ' is still open</b><button type="button" class="btn sm primary" data-vb="rejoin">↩ Rejoin</button><button type="button" class="btn sm danger" data-vb="endlost">End for everyone</button>';
+      if (el.innerHTML !== h) el.innerHTML = h;
+    }
+    function openClient() { try { if (V.cid && typeof A !== 'undefined' && A && A.props && A.props.some(p => p.id === V.cid)) { CW.open(V.cid); return true; } } catch (e) {} return false; }
+    function onBannerClick(e) {
+      const b = e.target.closest('[data-vb]'); if (!b) return; const a = b.dataset.vb;
+      try {
+        if (a === 'back') { if (!openClient()) { try { if (V.frame) V.frame.scrollIntoView({ behavior: 'smooth', block: 'start' }); else if (V.win) V.win.focus(); } catch (x) {} } }
+        else if (a === 'rejoin') { if (alive(V.lost)) { const room = V.lost.room; openClient(); start(room); } else { V.lost = null; actSave(null); } }
+        else if (a === 'endlost') endLost();
+        else if (a === 'end') { if (V.armEnd && Date.now() - V.armEnd < 4000) { V.armEnd = 0; endCall(false); } else { V.armEnd = Date.now(); setTimeout(() => { if (V.armEnd && Date.now() - V.armEnd >= 4000) V.armEnd = 0; banner(); }, 4100); } }
+      } catch (err) { console.warn('call bar', err); }
+      banner();
+    }
     // three parts (status+buttons / transcript / AI suggestions), each rewritten only when its own HTML changed, so a new transcript line never swaps the Use/No buttons out from under a tap
     function paint() {
+      try { banner(); } catch (e) {}
       const card = document.getElementById('vcCard'); if (!card) return; const p = body().split('\u0001'); while (p.length < 3) p.push('');
       if (!card.querySelector('#vcP0')) { card.innerHTML = '<h3>Video call</h3><div id="vcP0"></div><div id="vcP1"></div><div id="vcP2"></div>'; V.html = ['', '', '']; }
       for (let i = 0; i < 3; i++) if (V.html[i] !== p[i]) { card.querySelector('#vcP' + i).innerHTML = p[i]; V.html[i] = p[i]; }
@@ -3172,14 +3212,12 @@ window.CW_DECKS = [
     function onCardClick(e) {
       const b = e.target.closest('[data-vc]'); if (!b) return; const a = b.dataset.vc;
       try {
+        if ((a === 'start' || a === 'inperson') && winOpen()) { confirmSwitch(); return; }   /* v56: one call or recording at a time: ask first */
         if (a === 'start') start();
         else if (a === 'inperson') start('', 'inperson');
         else if (a === 'play') playRec(b.dataset.rid);
         else if (a === 'rejoin') { if (alive(V.lost)) start(V.lost.room); else { V.lost = null; paint(); } }
-        else if (a === 'endlost') {   // the window is gone but the room is open: end it for everyone from here
-          const r = V.lost; V.lost = null; V.last = null; V.msg = 'Call ended.'; paint();
-          if (r && r.room) { try { fetch(AI_BASE + '/room/end', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok() }, body: JSON.stringify({ room_name: r.room }) }).catch(() => {}); } catch (x) {} }
-        }
+        else if (a === 'endlost') endLost();   // the window is gone but the room is open: end it for everyone from here
         else if (a === 'show') { try { if (V.frame) V.frame.scrollIntoView({ behavior: 'smooth', block: 'start' }); else V.win && V.win.focus(); } catch (x) {} }
         else if (a === 'leave') {   // two taps: one stray tap must not hang up on the homeowner
           if (V.armEnd && Date.now() - V.armEnd < 4000) { V.armEnd = 0; endCall(false); }
@@ -3203,8 +3241,15 @@ window.CW_DECKS = [
       const C = CW.api.state(); if (V.win && C && V.lastConsent !== null && V.lastConsent !== !!C.consent.rec) { V.lastConsent = !!C.consent.rec; post({ type: 'consent', rec: V.lastConsent }); }   // the consent gate: the call window starts/stops the transcript from this
       paint();
     });
-    CW.hooks.onClose.push(function () { endCall(true); });
-    window.addEventListener('pagehide', () => { post({ type: 'end' }); });
+    /* v56: closing the client screen no longer hangs up on the homeowner: the call keeps running and the bar offers Back to the call / End.
+       A panel that never got a call going (an error) is put away. */
+    CW.hooks.onClose.push(function () { if (winOpen() && V.s && V.s.status === 'fatal') endCall(true); setTimeout(() => { try { injectCss(); banner(); } catch (e) {} }, 0); });
+    /* v56: leaving the page no longer ends the room (the call panel itself leaves and keeps the room open); it is remembered, so the next open offers Rejoin */
+    window.addEventListener('pagehide', () => { try { actRemember(); } catch (e) {} });
+    window.addEventListener('beforeunload', e => { try { if (winOpen() && V.s && V.s.status === 'live') { e.preventDefault(); e.returnValue = ''; } } catch (x) {} });
+    /* v56: an open call from before (Back, reload, the intake page) comes back as Rejoin */
+    try { const r0 = actLoad(); if (r0 && alive(r0)) { V.lost = { room: r0.room, exp: +r0.exp || 0 }; V.last = { room: r0.room, exp: +r0.exp || 0 }; V.inperson = !!r0.inperson; V.cid = String(r0.cid || ''); V.client = str(r0.client, 60); V.rejoinConsent = !!r0.consent; } else if (r0) actSave(null); } catch (e) {}
+    setInterval(() => { try { injectCss(); banner(); } catch (e) {} }, 3000);
     CW.video = { state: V, start, endCall, AI_ORIGIN, retryQueue };
   } catch (err) { console.warn('video module failed to start (the rest of the call screen is unaffected):', err); }
 })();
