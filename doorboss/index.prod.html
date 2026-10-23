@@ -3493,7 +3493,7 @@ window.CW_DECKS = [
   try {
     if (window.__dbExportsLoaded) return; window.__dbExportsLoaded = true;
     const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
-    const owner = () => { try { return !!(A && A.me && A.me.role === 'admin'); } catch (e) { return false; } };
+    const owner = () => { try { return !!(A && A.me && A.me.super_admin === true); } catch (e) { return false; } };   /* 10/23 (Charles): downloads are HIS only; a company admin (e.g. JX) no longer gets the buttons */
     const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
     async function call(path, body) {
       const tok = token(); if (!tok) throw new Error('sign out and back in to DoorBoss once');
