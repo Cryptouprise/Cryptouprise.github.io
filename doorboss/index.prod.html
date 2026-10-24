@@ -853,7 +853,8 @@ const DB = (() => {
         if (!navigator.onLine || !queue.length) return 0;
         let n = 0;
         const heldHouses = new Set(queue.filter(q => q.type==='knock' && held.has(q.body.client_id)).map(q => q.body.property_id));
-        const knocks = queue.filter(q => q.type==='knock' && !held.has(q.body.client_id) && !heldHouses.has(q.body.property_id)).map(q => q.body);
+        const mine = q => !q.body.user_id || !(typeof A !== 'undefined' && A && A.me) || q.body.user_id === A.me.id;   /* v22.12: a knock another rep made on this phone waits for that rep */
+        const knocks = queue.filter(q => q.type==='knock' && !held.has(q.body.client_id) && !heldHouses.has(q.body.property_id) && mine(q)).map(q => q.body);
         for (const k of knocks){ if (k.photos) delete k.photos; }   // no upload route on the server yet; photos stay off until it exists
         if (knocks.length){
           const res = await api('POST','/knocks', knocks);      // idempotent on client_id
@@ -863,7 +864,8 @@ const DB = (() => {
           const acked = new Set(res.map(r => r && r.client_id));
           const sent = new Set(knocks.filter(k => acked.has(k.client_id)).map(k => k.client_id)); let newlyStuck = 0;
           for (const k of knocks){ if (sent.has(k.client_id)) continue; const q = queue.find(x => x.type==='knock' && x.body.client_id===k.client_id); if (!q) continue; q.tries = (q.tries||0) + 1; if (q.tries === 3) newlyStuck++; }   /* never dropped, never parked: it stays in the queue and goes with the next flush */
-          if (newlyStuck && !A.__stuckWarned){ A.__stuckWarned = true; try { toast('The server keeps leaving out ' + newlyStuck + ' knock' + (newlyStuck===1?'':'s') + '. They stay on this phone and keep retrying: tell your manager'); } catch(e){} }
+          const why = (res.find(r => r && r.failed_client_id && r.error) || {}).error;   /* v22.12: the server says why a row failed */
+          if (newlyStuck && !A.__stuckWarned){ A.__stuckWarned = true; try { toast(newlyStuck + ' knock' + (newlyStuck===1?'':'s') + ' could not be saved' + (why ? ' (' + String(why).slice(0, 80) + ')' : '') + '. They stay on this phone and keep retrying: tell your manager'); } catch(e){} }
           sent.forEach(id => gone.add('k:'+id)); queue = queue.filter(q => !(q.type==='knock' && sent.has(q.body.client_id))); n += sent.size; saveQueue(); lastSentAt = Date.now();
         }
         for (const q of queue.filter(q => q.type==='message')){ await api('POST','/messages', q.body); gone.add(qid(q)); queue = queue.filter(x => x!==q); n++; saveQueue(); }
@@ -873,6 +875,7 @@ const DB = (() => {
       return flushing;
     },
     async queueLength(){ return queue.length; },
+    queueOthers(){ try { return queue.filter(q => q.type==='knock' && q.body.user_id && A.me && q.body.user_id !== A.me.id).length; } catch(e){ return 0; } },
     hold(cid){ held.add(cid); },
     release(cid){ held.delete(cid); },
     async undoKnock(cid, prev){   // only possible while the knock is still on the phone; once sent it is on the server
@@ -2116,7 +2119,7 @@ function editUser(id){
    the Tracking pill shows them it is on; the manager sees fix age so "last seen 9 min ago" is honest.
    True background tracking needs the native wrapper (AI-STUDIO-BUILD, stage 13).
    ============================================================ */
-async function updateSyncPill(){ A.queueLen = await DB.queueLength(); const p=$('#syncPill'); p.classList.toggle('off', !A.online); p.classList.toggle('err', false); $('#syncText').textContent = !A.online ? `Offline · ${A.queueLen} held` : A.queueLen ? `${A.queueLen} to sync` : 'Synced'; }
+async function updateSyncPill(){ A.queueLen = await DB.queueLength(); const p=$('#syncPill'); p.classList.toggle('off', !A.online); p.classList.toggle('err', false); const oth = DB.queueOthers ? DB.queueOthers() : 0; $('#syncText').textContent = (!A.online ? `Offline · ${A.queueLen} held` : (A.queueLen - oth) > 0 ? `${A.queueLen - oth} to sync` : 'Synced') + (oth ? ` · ${oth} for another rep` : ''); }
 async function flushQueue(){ if (!A.online) return 0; let n=0; try { n=await DB.flushQueue(); } catch(e){ console.warn('sync failed, will retry', e); if (/: 40[13] /.test(String(e && e.message)) && !A.authWall){ A.authWall=true; showAuthWall(e); } await updateSyncPill(); const p=$('#syncPill'); if (p) p.classList.add('err'); return -1; } if (n){ A.appts = await DB.listAppointments(); updateFollowBadge(); if (A.view==='follow') renderFollow(); } await updateSyncPill(); return n; }
 async function refreshAll(){ if (!A.online || document.hidden || A.savingKnock || !DB.refresh) return; try { await DB.refresh(); await reload(); renderPins(); updateNext(); updateFollowBadge(); if (A.view==='follow') renderFollow(); if (A.view==='team') renderTeam(); } catch(e){ console.warn('refresh failed', e); } }
 window.addEventListener('online', ()=>{ A.online=true; updateSyncPill(); flushQueue().then(n=>n&&toast(`Back online · synced ${n}`)); });
@@ -3740,6 +3743,10 @@ window.CW_DECKS = [
           };
           ni.parentNode.insertAdjacentElement('afterend', b);
         }
+        if (!document.getElementById('cardBtn')) {   /* B7: show the homeowner my card (QR) or text it to them */
+          const row = [...document.querySelectorAll('#sheet .row')].find(r => r.querySelector('#shText'));
+          if (row) { const cb = document.createElement('button'); cb.type = 'button'; cb.id = 'cardBtn'; cb.className = 'btn sm'; cb.textContent = '🪪 My card'; cb.onclick = () => showMyCard(p); row.appendChild(cb); }
+        }
         if (isFinite(p.lat) && isFinite(p.lng) && p.lat != null && !document.getElementById('wazeBtn')) {
           const dir = [...document.querySelectorAll('#sheet a.btn')].find(a => /Directions/.test(a.textContent));
           if (dir) { const w = document.createElement('a'); w.id = 'wazeBtn'; w.className = 'btn sm'; w.target = '_blank'; w.rel = 'noopener'; w.textContent = 'Waze ↗'; w.href = 'https://waze.com/ul?ll=' + p.lat + ',' + p.lng + '&navigate=yes'; dir.insertAdjacentElement('afterend', w); }
@@ -3747,6 +3754,34 @@ window.CW_DECKS = [
       } catch (e) { console.warn('field sheet', e); }
       return r;
     };
+
+    /* ---------- B7 my digital card (portal /api/portal/my-card: url + ready-made QR svg) ---------- */
+    let cardCache = null;
+    async function showMyCard(p) {
+      if (typeof openModal !== 'function') return;
+      if (!cardCache) {
+        try {
+          const tok = localStorage.getItem('doorboss.token') || localStorage.getItem('repAccessKey') || '';
+          const r = await fetch('/api/portal/my-card', { headers: { Authorization: 'Bearer ' + tok }, credentials: 'same-origin' });
+          if (r.ok) { const j = await r.json(); if (j && j.url && /^https:\/\//.test(j.url)) cardCache = j; }
+        } catch (e) {}
+      }
+      if (!cardCache) { T('Your card turns on after the next portal update'); return; }
+      const body = document.createElement('div'); body.className = 'stack'; body.style.alignItems = 'center';
+      const box = document.createElement('div'); box.style.cssText = 'background:#fff;padding:10px;border-radius:12px;width:220px;max-width:70vw';
+      if (typeof cardCache.svg === 'string' && /^\s*<svg[\s>]/i.test(cardCache.svg) && !/<script|on\w+\s*=|javascript:/i.test(cardCache.svg)) box.innerHTML = cardCache.svg;   /* our own portal's QR, checked for anything active */
+      const u = document.createElement('div'); u.className = 'muted'; u.style.cssText = 'font-size:12px;word-break:break-all;text-align:center'; u.textContent = cardCache.url;
+      const hint = document.createElement('div'); hint.style.cssText = 'font-size:14px;text-align:center'; hint.textContent = 'Let them scan this with their camera to save your number.';
+      body.appendChild(hint); body.appendChild(box); body.appendChild(u);
+      const textIt = () => {
+        const num = String((p && p.owner_phone) || '').replace(/[^\d+]/g, ''); if (!num) { T('No phone on file for this house'); return false; }
+        const go = () => { const who = (A.me && A.me.name ? String(A.me.name).split(' ')[0] : 'your rep'); (window.top || window).location.href = 'sms:' + num + '?&body=' + encodeURIComponent('Hi, this is ' + who +' with Elite Solar Recovery. Here is my card: ' + cardCache.url); };
+        let ok = false; try { ok = (A.knocks || []).some(k => k.property_id === p.id && k.text_ok) || (typeof textOkLocal === 'function' && textOkLocal(p.id)); } catch (e) {}
+        if (ok) { go(); return; }
+        if (typeof confirmBox === 'function') confirmBox('No OK to text on file', 'Only text if they told you it is OK. Tap the button only if they did.', () => { try { if (typeof rememberTextOk === 'function') rememberTextOk(p.id); } catch (e) {} go(); }, 'They said OK');
+      };
+      openModal({ title: '🪪 My card', body, actions: [{ label: 'Close' }].concat(p && p.owner_phone ? [{ label: 'Text it to them', primary: true, onClick: textIt }] : []) });
+    }
 
     /* ---------- A3 Back closes the card; B4 select mode takes pin taps ---------- */
     const _openSheet = openSheet, _closeSheet = closeSheet;
