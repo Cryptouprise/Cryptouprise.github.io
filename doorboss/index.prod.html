@@ -1104,7 +1104,7 @@ function initMap(){
   };
   const goSchematic = () => {
     if (swapped || loadedAny) return;
-    swapped=true; A.schematic=true; if (map.hasLayer(A.tiles)) map.removeLayer(A.tiles); if (map.hasLayer(A.sat)) map.removeLayer(A.sat); new Schematic({ tileSize:256, maxZoom:19 }).addTo(map); A.streetLayer = new StreetLayer().addTo(map); setMapNote('Preview map: streets and houses drawn from the list. Production shows real street tiles and satellite.'); map.setView(map.getCenter(), Math.max(map.getZoom(),17)); filterChips(); };
+    swapped=true; A.schematic=true; if (map.hasLayer(A.tiles)) map.removeLayer(A.tiles); if (map.hasLayer(A.sat)) map.removeLayer(A.sat); new Schematic({ tileSize:256, maxZoom:19 }).addTo(map); A.streetLayer = new StreetLayer().addTo(map); setMapNote('The street map did not load (weak signal). Showing a simple map of your houses; reload to try the street map again.'); map.setView(map.getCenter(), Math.max(map.getZoom(),17)); filterChips(); };
   setTimeout(() => { if (!loadedAny && errCount > 0) goSchematic(); }, 8000);
   A.tiles.on('tileload', noteLoaded); A.sat.on('tileload', noteLoaded);
   A.tiles.on('tileerror', onErr); A.sat.on('tileerror', onErr);
@@ -1127,7 +1127,7 @@ function initMap(){
   $('#drawUndo').onclick = drawUndo; $('#drawCancel').onclick = drawCancel; $('#drawFinish').onclick = drawFinish;
 }
 function setBasemap(b){
-  if (A.schematic) return toast('Satellite is blocked in this preview; it works once installed');
+  if (A.schematic) return toast('Satellite needs a stronger signal; reload to try again');
   A.basemap=b; const map=A.map;
   if (b==='satellite'){ if (map.hasLayer(A.tiles)) map.removeLayer(A.tiles); if (!map.hasLayer(A.sat)) A.sat.addTo(map); }
   else { if (map.hasLayer(A.sat)) map.removeLayer(A.sat); if (!map.hasLayer(A.tiles)) A.tiles.addTo(map); }
@@ -2013,7 +2013,7 @@ function renderMeView(){
     <div class="row"><span class="avatar" style="background:${A.me.color};width:48px;height:48px;font-size:22px">${esc(A.me.name[0])}</span><div><h2>${esc(A.me.name)}</h2><div class="muted" style="font-size:13px">${A.me.role} · ${myTerrs().map(t=>t.name).join(', ')||'no territory'}${streak?' · '+streak+'-day streak':''}</div></div></div>
     <div class="grid3">${goal(m.knocks,g.daily_knocks,'Doors today')}${goal(m.contacts,g.daily_contacts,'Contacts')}${goal(m.appts,g.daily_appts,'Appointments')}</div>
     <div class="grid3"><div class="tile"><div class="v num">${ratio(m.knocks,m.contacts)}</div><div class="l">Doors per contact</div></div><div class="tile"><div class="v num">${m.callbacks}</div><div class="l">Follow-ups set</div></div><div class="tile"><div class="v num">${m.signed}</div><div class="l">Signed</div></div></div>
-    <div class="card stack"><h3 style="font-size:18px">Sync</h3><div class="row between"><span>${A.online?'Online':'Offline — knocks are held on this phone'}</span><span class="muted num">${A.queueLen||0} queued</span></div><div class="row between"><span>GPS</span><span class="muted">${A.gpsOk?'Live':(A.myPos?'Unavailable here — using a demo position':'No fix — showing your territory')}</span></div><button class="btn sm" data-act="flush">Sync now</button></div>
+    <div class="card stack"><h3 style="font-size:18px">Sync</h3><div class="row between"><span>${A.online?'Online':'Offline — knocks are held on this phone'}</span><span class="muted num">${A.queueLen||0} queued</span></div><div class="row between"><span>GPS</span><span class="muted">${A.gpsOk?'Live':(A.myPos?(CONFIG.demo?'Demo position':'No live fix — using your last known spot'):'No fix — showing your territory')}</span></div><button class="btn sm" data-act="flush">Sync now</button></div>
     <div class="card stack"><h3 style="font-size:18px">Daily goals</h3><div class="grid3"><label class="f">Doors<input type="number" id="g_k" value="${g.daily_knocks}"></label><label class="f">Contacts<input type="number" id="g_c" value="${g.daily_contacts}"></label><label class="f">Appts<input type="number" id="g_a" value="${g.daily_appts}"></label></div><button class="btn sm" data-act="saveGoals">Save goals</button></div>
     ${A.me.role==='rep'?`<button class="btn block" data-rep="${A.me.id}">My day-by-day grid and comparison</button>`:''}
     <div class="card coach"><h3 style="font-size:18px">Ask the coach</h3><div class="muted" style="font-size:13px">Answers come from your own numbers${(A.settings.ai&&A.settings.ai.provider!=='company')?', phrased by your '+esc(A.settings.ai.provider)+' key':''}.</div>
@@ -3075,7 +3075,10 @@ window.CW_DECKS = [
       } catch (e) { if (w) w.close(); }
     }
     const winOpen = () => !!V.win && (V.frame ? V.frame.isConnected : !V.win.closed);
-    function undock() { try { if (V.frame) V.frame.remove(); } catch (e) {} V.frame = null; try { document.documentElement.classList.remove('vc-docked'); } catch (e) {} }
+    /* v58 (field audit A5): the screen stays awake while a call or in-person recording runs (before, only GPS tracking held it; a rep who said Not now to GPS could lose the recording when the screen locked) */
+    async function callWake(on) { try { if (on) { if (!V.wake && navigator.wakeLock) { V.wake = await navigator.wakeLock.request('screen'); V.wake.addEventListener('release', () => { V.wake = null; }); } } else { if (V.wake) V.wake.release(); V.wake = null; } } catch (e) { V.wake = null; } }
+    document.addEventListener('visibilitychange', () => { try { if (!document.hidden && winOpen()) callWake(true); } catch (e) {} });
+    function undock() { callWake(false); try { if (V.frame) V.frame.remove(); } catch (e) {} V.frame = null; try { document.documentElement.classList.remove('vc-docked'); } catch (e) {} }
     function dock() {   /* the call panel: right column on a wide screen, top band on a phone; lives on <body> so a workspace re-render never reloads the call */
       undock(); const fr = document.createElement('iframe'); fr.id = 'vcFrame'; fr.title = 'Call'; fr.setAttribute('allow', 'camera; microphone; autoplay; display-capture; speaker-selection');
       fr.src = AI_BASE + '/call?o=' + encodeURIComponent(location.origin) + '&embed=1'; document.body.appendChild(fr); document.documentElement.classList.add('vc-docked'); V.frame = fr; return fr.contentWindow;
@@ -3086,6 +3089,7 @@ window.CW_DECKS = [
       V.rejoin = rejoinRoom || ''; V.lost = null; if (!rejoinRoom) { V.last = null; V.inperson = mode === 'inperson'; }
       if (!rejoinRoom) { try { const C0 = CW.api.state(); const p0 = CW.api.prop ? CW.api.prop() : null; V.cid = (C0 && C0.id) || ''; V.client = str(p0 && p0.owner_name, 60); actSave(null);
         if (V.inperson && C0 && !C0.live) { const sb = document.querySelector('[data-cw="start"]'); if (sb) sb.click(); } } catch (e) {} }   /* v56: in person = the call has started (the top shows Live, not "Start call") */   // the "still open" note is cleared once we (re)open a window
+      callWake(true);
       let w = null; try { w = dock(); } catch (e) {}
       if (!w) { try { w = window.open(AI_BASE + '/call?o=' + encodeURIComponent(location.origin), 'doorboss_video', 'width=1180,height=820'); } catch (e) {} }   /* fallback: the old pop-out */
       if (!w) { V.msg = 'The call panel could not open. Reload this page and tap the button again.'; paint(); return; }
@@ -3267,11 +3271,11 @@ window.CW_DECKS = [
   try {
     if (window.__dbAskLoaded) return; window.__dbAskLoaded = true;
     const AI_BASE = String(window.DOORBOSS_AI_BASE || 'https://doorboss-ai.178-156-248-248.sslip.io').replace(/\/$/, '');
-    const CHIPS = ['Who do I call back today?', 'What appointments do I have coming up?', 'How are my numbers this week?', 'Best houses to knock near me', 'Which interested homeowners have I not followed up with?'];
+    const CHIPS = ['Who do I call back today?', 'Best bankrupt doors near me', 'How many bankrupt homes are within half a mile?', 'Map out a walking route of bankrupt doors near me', 'Which installers around here went bankrupt?', 'What do I say if they ask if this is a scam?', '🎯 Practice objections with me'];   /* v58: area counts, maps, installers, coaching, practice */
     /* v37: managers get team-insight prompts (the service already answers over the whole team for manager/admin sign-ins) */
     const MGR_CHIPS = ['Who has not knocked today?', 'Who is under half their daily goal right now?', 'Who has gone dark for 2 days or more?', 'Who set the most appointments this week?', 'Which callbacks across the team are overdue?', 'Where did we sign this week and who did it?'];
     const isMgr = () => { try { const AA = (typeof A !== 'undefined') ? A : window.A; return !!(AA && AA.me && (AA.me.role === 'admin' || AA.me.role === 'manager')); } catch (e) { return false; } };
-    const S = { open: false, busy: false, turns: [] };
+    const S = { open: false, busy: false, turns: [], mode: '' };
     const $ = id => document.getElementById(id);
     const token = () => { try { return localStorage.getItem('doorboss.token') || (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } catch (e) { return (typeof __DBTOK !== 'undefined' ? __DBTOK : '') || ''; } };
     const pos = () => { try { const AA = (typeof A !== 'undefined') ? A : window.A; /* the app's state is a top-level const, not window.A */ const p = AA && AA.myPos; if (!p) return null; const lat = Array.isArray(p) ? p[0] : p.lat, lng = Array.isArray(p) ? p[1] : p.lng; return (typeof lat === 'number' && typeof lng === 'number') ? { lat, lng } : null; } catch (e) { return null; } };
@@ -3287,7 +3291,7 @@ window.CW_DECKS = [
       const p = document.createElement('div'); p.id = 'askPanel'; p.hidden = true; p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'Ask the DoorBoss AI');
       p.innerHTML = '<div class="ask-top"><b>✨ Ask DoorBoss AI</b><button type="button" id="askClose" aria-label="Close">×</button></div><div class="ask-log" id="askLog"></div>' +
         '<div class="ask-note" id="askNote">Answers come only from your own doors, callbacks and appointments. It never texts or changes anything.</div><div class="ask-chips" id="askChips"></div>' +
-        '<form class="ask-bar" id="askForm"><input id="askIn" maxlength="500" placeholder="Ask about your leads…" autocomplete="off" aria-label="Your question"><button type="submit" id="askGo">Ask</button></form>';
+        '<form class="ask-bar" id="askForm"><input id="askIn" maxlength="500" placeholder="Ask anything…" autocomplete="off" aria-label="Your question"><button type="submit" id="askGo">Ask</button></form>';
       document.body.appendChild(p);
       $('askClose').onclick = close; $('askForm').onsubmit = e => { e.preventDefault(); send($('askIn').value); };
       document.addEventListener('keydown', e => { if (S.open && e.key === 'Escape') close(); });
@@ -3295,10 +3299,50 @@ window.CW_DECKS = [
     function line(cls, text) { const d = document.createElement('div'); d.className = cls; d.textContent = text; $('askLog').appendChild(d); $('askLog').scrollTop = $('askLog').scrollHeight; return d; }
     function paintChips() {
       const chips = $('askChips'); if (!chips) return; chips.textContent = ''; const m = isMgr();
-      for (const c of (m ? MGR_CHIPS.concat(CHIPS.slice(0, 2)) : CHIPS)) { const b = document.createElement('button'); b.type = 'button'; b.textContent = c; b.onclick = () => send(c); chips.appendChild(b); }
+      const list = S.mode === 'practice' ? ['⏹ Stop practice'] : (m ? MGR_CHIPS.concat(CHIPS.slice(0, 3), ['🎯 Practice objections with me']) : CHIPS);
+      for (const c of list) { const b = document.createElement('button'); b.type = 'button'; b.textContent = c; b.onclick = () => chip(c); chips.appendChild(b); }
       const n = $('askNote'); if (n) n.textContent = m ? 'Manager view: answers come from the whole team’s doors, callbacks and appointments. It never texts or changes anything.' : 'Answers come only from your own doors, callbacks and appointments. It never texts or changes anything.';
     }
-    function open() { build(); paintChips(); $('askPanel').hidden = false; S.open = true; if (!$('askLog').children.length) line('ask-a', isMgr() ? 'Hi! Ask me about the team: who has not knocked today, who is under goal, who went dark, who is setting appointments.' : 'Hi! Ask me anything about your doors: who to call back, your appointments, your numbers, or the best houses near you.'); setTimeout(() => { try { $('askIn').focus(); } catch (e) {} }, 50); }
+    /* v58: practice mode = the AI plays a homeowner and coaches with the approved lines */
+    function chip(c) {
+      if (/Practice objections/.test(c)) { S.mode = 'practice'; S.turns = []; paintChips(); line('ask-a', 'Practice mode: I play the homeowner, you answer like you would at the door. I coach you after each answer with the approved lines. Tap Stop practice when you are done.'); send('Start the practice: you are the homeowner at the door.'); return; }
+      if (/Stop practice/.test(c)) { S.mode = ''; S.turns = []; paintChips(); line('ask-a', 'Practice over. Ask me anything about your doors.'); return; }
+      send(c);
+    }
+    /* v58: the service's map ACTION -> buttons that set the filters, draw the area and build a walking route with the app's own route planner */
+    function actionRow(a) {
+      const row = document.createElement('div'); row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-self:flex-start';
+      const mk = (label, route) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.style.cssText = 'border:0;border-radius:12px;padding:10px 14px;font-weight:700;background:var(--accent,#f05a1a);color:var(--accent-fg,#fff)'; b.onclick = () => runAction(a, route); row.appendChild(b); };
+      mk('📍 Show on the map', false); if (a.route) mk('🚶 Plan the route (' + a.limit + ' doors)', true);
+      $('askLog').appendChild(row); $('askLog').scrollTop = $('askLog').scrollHeight;
+    }
+    function runAction(a, withRoute) {
+      try {
+        const AA = (typeof A !== 'undefined') ? A : window.A; if (!AA || !AA.map) return;
+        close(); if (typeof showView === 'function') showView('map');
+        AA.orphanOnly = a.filter !== 'all'; AA.activeOnly = false; AA.filter = a.filter === 'knockable_bankrupt' ? 'knockable' : (a.filter === 'all' ? 'all' : AA.filter);
+        if (typeof filterChips === 'function') filterChips();
+        let center = null;
+        if (a.where === 'place' && Array.isArray(a.center)) center = a.center;
+        else if (AA.myPos) center = [AA.myPos[0], AA.myPos[1]];
+        if (!center) { try { toast('Turn on GPS (the pill at the top) so I can center on you'); } catch (e) {} return; }
+        AA.userMoved = true;
+        if (a.where === 'place' && Array.isArray(a.bounds)) AA.map.fitBounds(a.bounds, { padding: [24, 24], maxZoom: 17 });
+        else AA.map.setView(center, a.radius_m <= 300 ? 18 : a.radius_m <= 700 ? 17 : a.radius_m <= 1500 ? 16 : 15);
+        if (AA.askCircle) { try { AA.map.removeLayer(AA.askCircle); } catch (e) {} AA.askCircle = null; }
+        if (a.where !== 'place') { AA.askCircle = L.circle(center, { radius: a.radius_m, color: '#f05a1a', weight: 2, dashArray: '6 6', fillOpacity: 0.04, interactive: false }).addTo(AA.map); setTimeout(() => { try { if (AA.askCircle) { AA.map.removeLayer(AA.askCircle); AA.askCircle = null; } } catch (e) {} }, 180000); }
+        if (typeof renderPins === 'function') renderPins(); if (typeof updateNext === 'function') updateNext();
+        if (!withRoute) return;
+        if (!AA.myPos) { try { toast('Turn on GPS to plan a walking route'); } catch (e) {} return; }
+        const inside = p => (a.where === 'place' && Array.isArray(a.bounds)) ? (p.lat >= a.bounds[0][0] && p.lat <= a.bounds[1][0] && p.lng >= a.bounds[0][1] && p.lng <= a.bounds[1][1]) : haversine(center, [p.lat, p.lng]) <= a.radius_m;
+        const cand = AA.props.filter(p => p && p.lat != null && isFinite(p.lat) && p.status !== 'do_not_knock' && isKnockable(p) && (a.filter === 'all' || p.installer_status === 'bankrupt') && inside(p));
+        if (!cand.length) { try { toast('No doors left to knock in that area'); } catch (e) {} return; }
+        const near = cand.map(p => ({ p, d: haversine(AA.myPos, [p.lat, p.lng]) })).sort((x, y) => x.d - y.d).slice(0, a.limit).map(x => x.p);
+        const plan = planRoute(AA.myPos, near); AA.route = { plan, i: 0, startedAt: now() }; drawRoute(); showNextRouteCard();
+        try { toast(plan.length + ' doors · ' + fmtDist(plan.reduce((t, x) => t + x.leg, 0)) + ' walking'); } catch (e) {}
+      } catch (e) { console.warn('ask action', e); try { toast('Could not put that on the map'); } catch (x) {} }
+    }
+    function open() { build(); paintChips(); $('askPanel').hidden = false; S.open = true; if (!$('askLog').children.length) line('ask-a', isMgr() ? 'Hi! Ask me about the team: who has not knocked today, who is under goal, who went dark, who is setting appointments.' : 'Hi! Ask me anything: bankrupt doors near you, how many are within half a mile, which installers went under, what to say at the door, or "map out a route for me". Want to warm up? Tap Practice objections.'); setTimeout(() => { try { $('askIn').focus(); } catch (e) {} }, 50); }
     function close() { if ($('askPanel')) $('askPanel').hidden = true; S.open = false; }
     async function send(q) {
       q = String(q || '').trim(); if (!q || S.busy) return; $('askIn').value = '';
@@ -3307,11 +3351,12 @@ window.CW_DECKS = [
       const tok = token(); if (!tok) { line('ask-a err', 'Sign out and sign back in to DoorBoss once, then ask again.'); return; }
       S.busy = true; $('askGo').disabled = true; const wait = line('ask-a', 'Looking through your doors…');
       try {
-        const p = pos(); const body = { question: q, history: S.turns.slice(-6) }; if (p) { body.lat = p.lat; body.lng = p.lng; }
+        const p = pos(); const body = { question: q, history: S.turns.slice(-6) }; if (p) { body.lat = p.lat; body.lng = p.lng; } if (S.mode) body.mode = S.mode;
         const r = await fetch(AI_BASE + '/ask', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tok }, body: JSON.stringify(body), signal: AbortSignal.timeout ? AbortSignal.timeout(60000) : undefined });
         let j = {}; try { j = await r.json(); } catch (e) {}
         if (!r.ok) throw new Error(j.error || ('error ' + r.status));
         wait.textContent = String(j.answer || '').slice(0, 3000) || 'No answer came back, try again.';
+        if (j.action && j.action.type === 'map') actionRow(j.action);
         S.turns.push({ role: 'user', text: q }, { role: 'assistant', text: wait.textContent }); if (S.turns.length > 12) S.turns = S.turns.slice(-12);
       } catch (e) {
         wait.className = 'ask-a err'; const m = String((e && e.message) || ''); wait.textContent = /abort|timeout/i.test(m) ? 'That took too long. Try again in a moment.' : /fetch/i.test(m) ? 'Could not reach the assistant. Check your signal and try again.' : m.charAt(0).toUpperCase() + m.slice(1) + '.';
@@ -3639,6 +3684,195 @@ window.CW_DECKS = [
       } catch (e) { clearInterval(t); }
     }, 500);
   } catch (e) {}
+})();
+
+</script>
+<script>
+/* ===== DoorBoss FIELD v1 (v58, Charles 10/23: "make things smoother, slicker, cleaner ... add all of B").
+   Layered on the core by wrapping its own functions (they are top-level declarations, so every caller picks the wrapper up):
+   A1  a half-typed note on a house card is kept per house and comes back when the card opens again (tapping another pin / the map no longer loses it)
+   A3  the phone's Back button closes the house card instead of leaving the app
+   A4  the map remembers where the rep was (spot, zoom, filters) for 12 hours, across a reload or the phone closing the tab
+   A6  "Do not knock" asks once (it hides the house from everyone's Knock next and routes)
+   B2  a microphone button by the note: talk instead of typing (the phone's own speech recognition; nothing is sent anywhere by this app)
+   B3  route: open the next stops in Google Maps (walking); house card: Waze next to Directions
+   B4  Select: tap several pins, mark them all Not home / Not interested in one go
+   B5  after an appointment is saved: add it to my calendar, or text the homeowner a confirmation (the text keeps the OK-to-text check)
+   B6  heat / battery: the screen may sleep after 5 minutes without a touch (kept awake while a route, a call or a house card is open)
+   Never write a literal closing script tag in this file. Block comments only. ===== */
+(function () {
+  try {
+    if (window.__dbField) return; window.__dbField = true;
+    if (typeof A === 'undefined' || typeof openSheet !== 'function') return;
+    const $q = id => document.getElementById(id);
+    const T = (m) => { try { toast(m); } catch (e) {} };
+    const ls = { get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }, set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} } };
+
+    /* ---------- A1 drafts ---------- */
+    const DK = 'doorboss.drafts.v1';
+    const drafts = () => { const d = ls.get(DK, {}); const cut = Date.now() - 7 * 86400000; for (const k in d) if (!d[k] || d[k].at < cut) delete d[k]; return d; };
+    const draftSave = (id, note) => { const d = drafts(); if (note && note.trim()) d[id] = { note: note.slice(0, 2000), at: Date.now() }; else delete d[id]; ls.set(DK, d); };
+    const draftGet = id => (drafts()[id] || {}).note || '';
+    document.addEventListener('input', e => { try { if (e.target && e.target.id === 'noteInput' && A.sheetProp) draftSave(A.sheetProp.id, e.target.value); } catch (x) {} }, true);
+
+    /* ---------- wrap renderSheet: restore the draft, add the mic and Waze ---------- */
+    const _renderSheet = renderSheet;
+    renderSheet = function () {
+      const r = _renderSheet.apply(this, arguments);
+      try {
+        const p = A.sheetProp; if (!p) return r;
+        const ni = $q('noteInput');
+        if (ni && !ni.value) { const d = draftGet(p.id); if (d) { ni.value = d; if (!A._draftToast || A._draftToast !== p.id) { A._draftToast = p.id; T('Your note for this house is back'); } } }
+        if (ni && !$q('micBtn')) {
+          const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+          const b = document.createElement('button'); b.type = 'button'; b.id = 'micBtn'; b.className = 'btn sm'; b.textContent = '🎤 Talk'; b.title = 'Say your note instead of typing it';
+          b.style.cssText = 'margin-top:6px';
+          b.onclick = () => {
+            if (!SR) { T('Use the microphone key on your keyboard to talk your note'); try { ni.focus(); } catch (e) {} return; }
+            if (A._rec) { try { A._rec.stop(); } catch (e) {} return; }
+            const rec = new SR(); A._rec = rec; rec.lang = 'en-US'; rec.interimResults = false; rec.continuous = false;
+            const base = ni.value ? ni.value.replace(/\s+$/, '') + ' ' : '';
+            b.textContent = '● Listening… tap to stop';
+            rec.onresult = ev => { let t = ''; for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript; ni.value = (base + t).trim(); draftSave(p.id, ni.value); };
+            rec.onerror = ev => { T(ev && ev.error === 'not-allowed' ? 'Microphone is blocked for this site' : 'Could not hear that, try again'); };
+            rec.onend = () => { A._rec = null; b.textContent = '🎤 Talk'; };
+            try { rec.start(); } catch (e) { A._rec = null; b.textContent = '🎤 Talk'; }
+          };
+          ni.parentNode.insertAdjacentElement('afterend', b);
+        }
+        if (isFinite(p.lat) && isFinite(p.lng) && p.lat != null && !document.getElementById('wazeBtn')) {
+          const dir = [...document.querySelectorAll('#sheet a.btn')].find(a => /Directions/.test(a.textContent));
+          if (dir) { const w = document.createElement('a'); w.id = 'wazeBtn'; w.className = 'btn sm'; w.target = '_blank'; w.rel = 'noopener'; w.textContent = 'Waze ↗'; w.href = 'https://waze.com/ul?ll=' + p.lat + ',' + p.lng + '&navigate=yes'; dir.insertAdjacentElement('afterend', w); }
+        }
+      } catch (e) { console.warn('field sheet', e); }
+      return r;
+    };
+
+    /* ---------- A3 Back closes the card; B4 select mode takes pin taps ---------- */
+    const _openSheet = openSheet, _closeSheet = closeSheet;
+    openSheet = function (id) {
+      if (A.selMode) { toggleSel(id); return; }
+      const r = _openSheet.apply(this, arguments);
+      try { if (A.sheetProp && !A._sheetHist) { history.pushState({ db: 'sheet' }, ''); A._sheetHist = true; } } catch (e) {}
+      return r;
+    };
+    closeSheet = function () {
+      try { const ni = $q('noteInput'); if (ni && ni.value.trim() && A.sheetProp && !A.savingKnock) T('Note kept on this house'); } catch (e) {}
+      const r = _closeSheet.apply(this, arguments);
+      try { if (A._sheetHist && !A._popping) { A._sheetHist = false; A._ignorePop = (A._ignorePop || 0) + 1; history.back(); } else A._sheetHist = false; } catch (e) {}   /* the popstate this back() causes is ours: ignored, so it never closes the NEXT card the app opens 300 ms later */
+      return r;
+    };
+    window.addEventListener('popstate', () => { try { if (A._ignorePop > 0) { A._ignorePop--; return; } if (A._sheetHist && A.sheetProp) { A._popping = true; A._sheetHist = false; closeSheet(); A._popping = false; } } catch (e) { A._popping = false; } });
+
+    /* ---------- wrap saveKnock: Do-not-knock asks once; drafts cleared on save; appointment follow-ups ---------- */
+    const _saveKnock = saveKnock;
+    saveKnock = async function (opts) {
+      const p = A.sheetProp, st = A.pendingStatus, when = A.pendingWhen, t0 = Date.now();
+      if (p && st === 'do_not_knock' && !(opts && opts.confirmed)) {
+        A.pendingStatus = null;
+        const go = () => { if (A.sheetProp !== p) openSheet(p.id); A.pendingStatus = 'do_not_knock'; saveKnock(Object.assign({}, opts || {}, { confirmed: true })); };
+        if (typeof confirmBox === 'function') confirmBox('Mark do not knock?', 'This house disappears from Knock next and routes for the whole team. Use it only when they asked us not to come back.', go, 'Do not knock');
+        else if (window.confirm('Mark this house do not knock?')) go();
+        return;
+      }
+      const r = await _saveKnock.apply(this, arguments);
+      try {
+        const saved = p && (A.knocks || []).some(k => k.property_id === p.id && (k.created_at || 0) >= t0 - 2000);
+        if (saved) { draftSave(p.id, ''); if (st === 'appointment') apptFollow(p, when); }
+      } catch (e) {}
+      return r;
+    };
+    function apptFollow(p, when) {
+      if (typeof openModal !== 'function') return;
+      const t = when ? new Date(when) : null;
+      const z = d => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+      const cal = t ? 'https://calendar.google.com/calendar/render?action=TEMPLATE&text=' + encodeURIComponent('Solar review: ' + (p.owner_name || 'homeowner')) + '&dates=' + z(t) + '/' + z(new Date(t.getTime() + 30 * 60000)) + '&location=' + encodeURIComponent(p.address || '') + '&details=' + encodeURIComponent('Booked in DoorBoss. Phone: ' + (p.owner_phone || 'not on file')) : '';
+      const body = document.createElement('div'); body.className = 'stack';
+      body.innerHTML = '<div style="font-size:15px">Appointment set' + (t ? ' for <b>' + esc(t.toLocaleString([], { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })) + '</b>' : '') + '.</div><div class="muted" style="font-size:13px">Put it on your calendar so you get a reminder, and text them a confirmation if they said texting is OK.</div>';
+      openModal({ title: '📅 Appointment set', body, actions: [{ label: 'Done' }].concat(cal ? [{ label: 'Add to my calendar', onClick: () => { try { window.open(cal, '_blank', 'noopener'); } catch (e) {} return false; } }] : []).concat(p.owner_phone && typeof openTextModal === 'function' ? [{ label: 'Text a confirmation', primary: true, onClick: () => { setTimeout(() => { try { openTextModal(p); setTimeout(() => { const b = [...document.querySelectorAll('#tplQuick button')].find(x => /Confirm/.test(x.textContent)); if (b) b.click(); }, 80); } catch (e) {} }, 60); } }] : []) });
+    }
+
+    /* ---------- A4 remember the map ---------- */
+    const VK = 'doorboss.view.v1';
+    const _startView = startView;
+    startView = function (map) {
+      const r = _startView.apply(this, arguments);
+      try {
+        const v = ls.get(VK, null);
+        if (v && v.at > Date.now() - 12 * 3600000 && Array.isArray(v.c) && isFinite(v.c[0]) && isFinite(v.c[1]) && v.z >= 10 && v.z <= 20) {
+          if (typeof v.filter === 'string') A.filter = v.filter; A.orphanOnly = !!v.orphanOnly; A.activeOnly = !!v.activeOnly && !A.orphanOnly; A.mine = !!v.mine;
+          map.setView(v.c, v.z, { animate: false }); A.userMoved = true;
+        }
+      } catch (e) {}
+      return r;
+    };
+    let vT = null;
+    const saveView = () => { clearTimeout(vT); vT = setTimeout(() => { try { if (!A.map) return; const c = A.map.getCenter(); ls.set(VK, { c: [c.lat, c.lng], z: A.map.getZoom(), filter: A.filter, orphanOnly: !!A.orphanOnly, activeOnly: !!A.activeOnly, mine: !!A.mine, at: Date.now() }); } catch (e) {} }, 400); };
+    const hookMap = setInterval(() => { if (A.map) { clearInterval(hookMap); A.map.on('moveend', saveView); const fc = $q('filterChips'); if (fc) fc.addEventListener('click', e => { onChipClick(e); saveView(); }); } }, 300);
+
+    /* ---------- B3 route -> Google Maps ---------- */
+    const _showNext = showNextRouteCard;
+    showNextRouteCard = function () {
+      const r = _showNext.apply(this, arguments);
+      try {
+        let b = $q('nextMaps'); const card = $q('nextCard');
+        if (!b && card) { b = document.createElement('button'); b.id = 'nextMaps'; b.className = 'go'; b.title = 'Open the next stops in Google Maps'; b.textContent = '🧭'; b.style.cssText = 'margin-left:6px;min-width:44px'; b.onclick = openRouteInMaps; const sk = $q('nextSkip'); if (sk) card.insertBefore(b, sk); else card.appendChild(b); }
+        if (b) b.hidden = !A.route;
+      } catch (e) {}
+      return r;
+    };
+    const _updateNext = updateNext;
+    updateNext = function () { const r = _updateNext.apply(this, arguments); try { const b = $q('nextMaps'); if (b) b.hidden = !A.route; } catch (e) {} return r; };
+    function openRouteInMaps() {
+      if (!A.route) return; const left = A.route.plan.slice(A.route.i).map(x => x.p).filter(p => p && isFinite(p.lat) && isFinite(p.lng)).slice(0, 10);
+      if (!left.length) return; const dest = left[left.length - 1], mid = left.slice(0, -1);
+      const u = 'https://www.google.com/maps/dir/?api=1&travelmode=walking&destination=' + dest.lat + ',' + dest.lng + (A.myPos ? '&origin=' + A.myPos[0] + ',' + A.myPos[1] : '') + (mid.length ? '&waypoints=' + encodeURIComponent(mid.map(p => p.lat + ',' + p.lng).join('|')) : '');
+      try { window.open(u, '_blank', 'noopener'); } catch (e) {}
+    }
+
+    /* ---------- B4 select several pins ---------- */
+    A.sel = new Set();
+    const _filterChips = filterChips;
+    filterChips = function () { const r = _filterChips.apply(this, arguments); try { const c = $q('filterChips'); if (c && !c.querySelector('[data-selmode]')) c.insertAdjacentHTML('beforeend', '<button class="chip' + (A.selMode ? ' on' : '') + '" data-selmode="1" title="Tap several houses, then mark them all at once">☑ Select</button>'); } catch (e) {} return r; };
+    function onChipClick(e) { const b = e.target.closest('[data-selmode]'); if (!b) return; A.selMode = !A.selMode; if (!A.selMode) clearSel(); else { if (A.sheetProp) _closeSheet(); T('Tap the houses to select them'); } paintSel(); filterChips(); }
+    function toggleSel(id) { const p = byId(A.props, id); if (!p) return; if (A.sel.has(id)) A.sel.delete(id); else A.sel.add(id); paintSel(); }
+    function clearSel() { A.sel.clear(); paintSel(); }
+    function paintSel() {
+      try {
+        if (!A.selLayer) { A.selLayer = L.layerGroup().addTo(A.map); }
+        A.selLayer.clearLayers(); if (!A.svgRenderer) A.svgRenderer = L.svg({ padding: 0.5 });
+        for (const id of A.sel) { const p = byId(A.props, id); if (p && isFinite(p.lat)) L.circleMarker([p.lat, p.lng], { renderer: A.svgRenderer, radius: 16, color: '#1e8cff', weight: 4, fill: false, interactive: false }).addTo(A.selLayer); }
+        let bar = $q('selBar');
+        if (!A.selMode) { if (bar) bar.remove(); return; }
+        if (!bar) { bar = document.createElement('div'); bar.id = 'selBar'; bar.style.cssText = 'position:fixed;left:50%;transform:translateX(-50%);bottom:calc(84px + env(safe-area-inset-bottom));z-index:1300;background:#12202e;color:#fff;padding:10px 12px;border-radius:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;max-width:calc(100% - 24px);box-shadow:0 8px 28px rgba(0,0,0,.35)'; document.body.appendChild(bar); bar.addEventListener('click', onSelBar); }
+        bar.innerHTML = '<b>' + A.sel.size + ' selected</b><button type="button" class="btn sm" data-bulk="not_home"' + (A.sel.size ? '' : ' disabled') + '>Not home</button><button type="button" class="btn sm" data-bulk="not_interested"' + (A.sel.size ? '' : ' disabled') + '>Not interested</button><button type="button" class="btn sm" data-bulk="done">Done</button>';
+      } catch (e) { console.warn('select', e); }
+    }
+    async function onSelBar(e) {
+      const b = e.target.closest('[data-bulk]'); if (!b) return; const st = b.dataset.bulk;
+      if (st === 'done') { A.selMode = false; clearSel(); filterChips(); return; }
+      const ids = [...A.sel]; if (!ids.length) return; b.disabled = true;
+      let n = 0;
+      for (const id of ids) {
+        const p = byId(A.props, id); if (!p) continue;
+        try { await DB.addKnock({ property_id: p.id, user_id: A.me.id, status: st, note: '', lat: A.myPos ? A.myPos[0] : null, lng: A.myPos ? A.myPos[1] : null, accuracy_m: A.gpsAcc || null, callback_at: null, appointment_at: null, text_ok: false, source: 'door', photos: [] }); n++; } catch (x) {}
+      }
+      A.props = await DB.listProperties(); A.knocks = await DB.listKnocks(); normalizeData();
+      renderPins(); updateNext(); updateFollowBadge(); updateSyncPill(); try { flushQueue(); } catch (x) {}
+      A.selMode = false; clearSel(); filterChips();
+      T(n + (n === 1 ? ' house' : ' houses') + ' marked ' + (st === 'not_home' ? 'not home' : 'not interested') + (A.online ? '' : ' · will sync when you have signal'));
+    }
+
+    /* ---------- B6 let the screen sleep when idle ---------- */
+    let lastTouch = Date.now();
+    ['touchstart', 'pointerdown', 'keydown'].forEach(ev => document.addEventListener(ev, () => { lastTouch = Date.now(); try { if (GPS.consent && GPS.on && !GPS.wake && !document.hidden) requestWake(); } catch (e) {} }, { passive: true, capture: true }));
+    setInterval(() => {
+      try {
+        const busy = A.route || A.sheetProp || (window.CW && CW.api && CW.api.state()) || document.getElementById('vcFrame');
+        if (GPS.wake && !busy && Date.now() - lastTouch > 5 * 60000) releaseWake();
+      } catch (e) {}
+    }, 30000);
+  } catch (err) { console.warn('field module failed to start (the rest of DoorBoss is unaffected):', err); }
 })();
 
 </script>
