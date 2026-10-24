@@ -712,12 +712,12 @@ const DB = (() => {
     return { get, set };
   })();
   let idbOK = false, propsT = null;
-  const cacheSnapshot = withProps => { const o = { terrs:cache.terrs, users:cache.users, me:cache.me, goals:cache.goals, settings:cache.settings, appts:cache.appts||[] }; if (withProps){ o.props = cache.props; o.propsSince = cache.propsSince; } return o; };
-  function savePropsNow(){ clearTimeout(propsT); propsT = null; if (!idbOK) return; IDB.set('props', { props:cache.props, propsSince:cache.propsSince, at:Date.now() }).catch(() => { idbOK = false; try { localStorage.setItem(CKEY, JSON.stringify(cacheSnapshot(true))); } catch(e){} }); }
+  const cacheSnapshot = withProps => { const o = { terrs:cache.terrs, users:cache.users, me:cache.me, goals:cache.goals, settings:cache.settings, appts:cache.appts||[] }; if (withProps){ o.props = cache.props.filter(p => p && !p.virtual); o.propsSince = cache.propsSince; } return o; };
+  function savePropsNow(){ clearTimeout(propsT); propsT = null; if (!idbOK) return; IDB.set('props', { props:cache.props.filter(p => p && !p.virtual), propsSince:cache.propsSince, at:Date.now() }).catch(() => { idbOK = false; try { localStorage.setItem(CKEY, JSON.stringify(cacheSnapshot(true))); } catch(e){} }); }
   function savePropsSoon(){ if (!idbOK || propsT) return; propsT = setTimeout(savePropsNow, 20000); }   // knocks are already safe in the queue; houses can wait
   try { addEventListener('pagehide', savePropsNow); document.addEventListener('visibilitychange', () => { if (document.hidden) savePropsNow(); }); } catch(e){}
   async function loadLocal(){ try { queue = JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch(e){ queue=[]; } try { const c = JSON.parse(localStorage.getItem(CKEY) || 'null'); if (c) cache = Object.assign(cache, c); } catch(e){} try { const kk = JSON.parse(localStorage.getItem(KKEY) || 'null'); if (kk && Array.isArray(kk.knocks)) cache.knocks = kk.knocks; } catch(e){}
-    try { const rec = await IDB.get('props'); idbOK = true; if (rec && Array.isArray(rec.props)){ cache.props = rec.props; cache.propsSince = rec.propsSince || null; } } catch(e){ idbOK = false; } }
+    try { const rec = await IDB.get('props'); idbOK = true; if (rec && Array.isArray(rec.props)){ cache.props = rec.props.filter(p => p && !p.virtual);   /* v22.10: a virtual intake house saved by an older build broke the map */ cache.propsSince = rec.propsSince || null; } } catch(e){ idbOK = false; } }
   const gone = new Set();   // v22: ids THIS tab sent or undid, so merging with another tab's queue never brings them back
   const qid = q => q.type==='knock' ? 'k:'+q.body.client_id : 'm:'+q.body.id;
   function saveQueue(){   // v22: merge with what another tab (home-screen app + browser) saved; never silently overwrite it; a failed save is never silent
@@ -1118,8 +1118,8 @@ function initMap(){
   $('#fabLocate').onclick = () => { if (A.myPos) map.setView(A.myPos, Math.max(map.getZoom(),17)); else toast('No position yet'); };
   $('#fabAdd').onclick = () => { if (!A.myPos) return toast('No position yet'); openAddHouse(A.myPos); };
   $('#fabRoute').onclick = () => { if (A.route) { confirmBox('End route?', `${A.route.plan.length-A.route.i} doors left on it.`, endRoute, 'End route'); } else startRoute(); };
-  map.on('zoomend', () => { A._zr = Date.now(); renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); });
-  map.on('moveend', () => { if (A._zr && Date.now() - A._zr < 400) return; if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); });   // v21: a zoom already redrew
+  map.on('zoomend', () => { A._zr = Date.now(); try { renderPins(); if (A.nextId) drawNextRing(byId(A.props, A.nextId)); } catch (e) { console.warn('pins after zoom', e); } });   /* v22.10: an error here used to stop Leaflet's own redraw (giant stretched pins) */
+  map.on('moveend', () => { if (A._zr && Date.now() - A._zr < 400) return; try { if (map.getZoom() >= 18 || A.props.length > 3000) renderPins(); } catch (e) { console.warn('pins after move', e); } });   // v21: a zoom already redrew
   $('#nextGo').onclick = () => { if (A.nextId) openSheet(A.nextId); };
   /* v22.7 (10/22, Charles: a rep could not get the suggested house off the screen): ✕ skips it for the rest of the day and shows the next one */
   $('#nextSkip').onclick = () => { if (A.route) { A.route.i = Math.min(A.route.plan.length, A.route.i + 1); drawRoute(); showNextRouteCard(); toast(A.route ? 'Skipped that stop' : 'Route finished'); return; }   /* v22.8: on a route the X skips the stop */
@@ -1154,8 +1154,11 @@ function filterChips(){
     `<button class="chip${A.basemap==='satellite'?' on':''}" data-sat="1" ${A.schematic?'style="opacity:.5"':''}>Satellite</button>`;
   c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; if (A.orphanOnly) A.activeOnly=false; } else if (b.dataset.act){ A.activeOnly=!A.activeOnly; if (A.activeOnly) A.orphanOnly=false; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
 }
+/* v22.10: a house without a real position (an intake client opened for a call) is never a map pin, a cluster, a Knock next or a route stop */
+function hasLL(p){ return !!p && p.lat != null && p.lng != null && p.lat !== '' && p.lng !== '' && isFinite(p.lat) && isFinite(p.lng); }
 function visibleProps(){
   return A.props.filter(p => {
+    if (!hasLL(p)) return false;
     if (A.orphanOnly && p.installer_status!=='bankrupt') return false;   // the portal stores 'bankrupt' (orphaned installer) or 'unknown'
     if (A.activeOnly && p.installer_status==='bankrupt') return false;   // v22.9: the other half: homes whose installer is still in business
     if (A.mine && !isMgr() && !inMyTerr(p)) return false;
@@ -1266,7 +1269,7 @@ function updateNext(){
   const card=$('#nextCard'); const skipped = skipLoad();
   if (A.route){ showNextRouteCard(); return; }
   if (!A.myPos || A.draw){ card.hidden=true; A.nextId=null; return; }
-  const cand = A.props.filter(p => (!A.mine ? true : inMyTerr(p)) && p.status!=='do_not_knock' && !skipped[p.id]);
+  const cand = A.props.filter(p => hasLL(p) && (!A.mine ? true : inMyTerr(p)) && p.status!=='do_not_knock' && !skipped[p.id]);
   const due = cand.filter(p => p.status==='callback' && p.callback_at && p.callback_at <= now()+30*60000);
   let pickP=null, why='';
   const nearest = arr => { let best=null, bd=Infinity; for (const p of arr){ const d=haversine(A.myPos,[p.lat,p.lng]); if (d<bd){ bd=d; best=p; } } return best ? {p:best, d:bd} : undefined; };
@@ -1394,7 +1397,7 @@ function planRoute(start, props, opts={}){
 }
 function routeCandidates(){
   const inTerr = !A.mine ? A.props : A.props.filter(inMyTerr);
-  return inTerr.filter(p => p.status!=='do_not_knock' && (isKnockable(p)));
+  return inTerr.filter(p => hasLL(p) && p.status!=='do_not_knock' && (isKnockable(p)));
 }
 function startRoute(){
   if (!A.myPos) return toast('No position yet');
