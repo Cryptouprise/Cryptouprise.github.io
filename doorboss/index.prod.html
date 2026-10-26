@@ -185,6 +185,10 @@ main{flex:1;min-height:0;position:relative}
 .seg button{flex:1;height:32px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted)}
 .seg button.on{background:var(--surface);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.12)}
 /* v22.13 date bar (Team + rep page) */
+/* v22.14 wide screens: Team + rep pages use the width (they were a 960px strip on a desktop) */
+@media (min-width:1100px){ #view-team .wrap, #view-rep .wrap { max-width:1400px } }
+@media (min-width:1280px){ #teamWrap.two { display:grid; grid-template-columns:minmax(0,5fr) minmax(0,7fr); column-gap:18px; align-items:start }
+  #teamWrap.two > :not(#pfTeam):not(#teamBody) { grid-column:1 / -1 } #teamWrap.two > #pfTeam { grid-column:1 } #teamWrap.two > #teamBody { grid-column:2 } }
 .pwrap{margin:0 0 10px}.pbar{display:flex;gap:6px;overflow-x:auto;padding:2px 0 4px;scrollbar-width:none;-webkit-overflow-scrolling:touch}.pbar::-webkit-scrollbar{display:none}
 .pbar button{flex:none;min-height:36px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
 .pbar button.on{background:var(--accent,#f05a1a);border-color:transparent;color:#fff}
@@ -1828,6 +1832,7 @@ function renderTeam(){
   const w=$('#teamWrap');
   const tabs = isMgr() ? [['board','Leaderboard'],['live','Live'],['stats','Stats'],['territories','Territories'],['data','Data']] : [['board','Leaderboard'],['territories','Territories']];
   if (!tabs.some(t=>t[0]===A.teamTab)) A.teamTab='board';
+  w.classList.toggle('two', A.teamTab==='board');   /* v22.14: wide screens show the leaderboard next to the board */
   w.innerHTML = `<div class="row between" style="margin-bottom:6px"><h2>Team</h2></div>${periodBar('periodSeg', A.period)}
     <div class="sub-tabs">${tabs.map(([k,l])=>`<button data-t="${k}" class="${A.teamTab===k?'on':''}">${l}</button>`).join('')}</div><div id="teamBody"></div>`;
   $('.sub-tabs',w).onclick=e=>{ const b=e.target.closest('button'); if(!b) return; A.teamTab=b.dataset.t; renderTeam(); };
