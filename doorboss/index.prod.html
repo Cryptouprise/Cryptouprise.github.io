@@ -184,6 +184,12 @@ main{flex:1;min-height:0;position:relative}
 .seg{display:flex;background:var(--surface-2);border:1px solid var(--line);border-radius:10px;padding:3px;gap:3px}
 .seg button{flex:1;height:32px;border-radius:8px;font-size:13px;font-weight:600;color:var(--muted)}
 .seg button.on{background:var(--surface);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+/* v22.13 date bar (Team + rep page) */
+.pwrap{margin:0 0 10px}.pbar{display:flex;gap:6px;overflow-x:auto;padding:2px 0 4px;scrollbar-width:none;-webkit-overflow-scrolling:touch}.pbar::-webkit-scrollbar{display:none}
+.pbar button{flex:none;min-height:36px;padding:0 12px;border-radius:999px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:600;color:var(--muted);white-space:nowrap}
+.pbar button.on{background:var(--accent,#f05a1a);border-color:transparent;color:#fff}
+.pdates{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 2px}.pdates label{display:flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--muted)}
+.pdates input{font-size:16px;padding:6px 8px;border-radius:8px;border:1px solid var(--line);background:var(--surface);color:var(--fg)}.plabel{font-size:12px;color:var(--muted);margin-top:2px}
 .list{display:flex;flex-direction:column}
 .item{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
 .item:last-child{border-bottom:0}
@@ -360,7 +366,7 @@ table.tbl td.n,table.tbl th.n{text-align:right}
 <div id="app">
   <header class="topbar">
     <div class="brand"><span class="dot"></span><span>DoorBoss</span></div>
-    <a class="pill" id="toPortal" href="/" title="Back to the intake portal" style="text-decoration:none">← Intake</a>
+    <a class="pill" id="toPortal" href="/" target="_top" title="Back to the intake portal" style="text-decoration:none">← Intake</a>
     <span class="role-badge" id="roleBadge">Manager</span>
     <div class="spacer"></div>
     <button class="pill off" id="trackPill" title="Location tracking"><span class="led"></span><span id="trackText">GPS off</span></button>
@@ -816,8 +822,10 @@ const DB = (() => {
       return k;
     },
     async listKnocks(){ return cache.knocks; },
+    /* v22.13: the Team date bar asked for days older than the 35 the phone holds: fetch them once and keep them for this session */
+    async loadHistory(fromIso){ const ks = (await api('GET', `/knocks?from=${encodeURIComponent(fromIso)}`)).map(normKnock); mergeBy(cache.knocks, ks, x => x.client_id || x.id); if (!cache.histFrom || fromIso < cache.histFrom) cache.histFrom = fromIso; return ks.length; },
     async listAppointments(){
-      try { cache.appts = (await api('GET', `/appointments?from=${encodeURIComponent(new Date(Date.now()-35*86400000).toISOString())}`)).map(a => Object.assign({}, a, { at:ts(a.at), created_at:ts(a.created_at), updated_at:ts(a.updated_at) })); saveCache(); } catch(e){}
+      try { cache.appts = (await api('GET', `/appointments?from=${encodeURIComponent((d35 => cache.histFrom && cache.histFrom < d35 ? cache.histFrom : d35)(new Date(Date.now()-35*86400000).toISOString()))}`)).map(a => Object.assign({}, a, { at:ts(a.at), created_at:ts(a.created_at), updated_at:ts(a.updated_at) })); saveCache(); } catch(e){}
       const base = cache.appts || [];
       // a booking still waiting to sync shows as a provisional appointment (no actions) so it never vanishes offline
       const prov = queue.filter(q => q.type==='knock' && q.body.status==='appointment' && q.body.appointment_at).map(q => ({ id:'pending:'+q.body.client_id, property_id:q.body.property_id, user_id:q.body.user_id, at:ts(q.body.appointment_at), status:'scheduled', created_at:ts(q.body.created_at), updated_at:ts(q.body.created_at), note:q.body.note||null, pending:true }));
@@ -908,7 +916,7 @@ const A = {
   view:'map', filter:'all', mine:false, showReps:true,   // 'all' by default: a house you just knocked must stay on the map in its new color ('Knock next' hides it)
   myPos:null, gpsOk:false, map:null, markers:new Map(), terrLayers:new Map(), repLayers:new Map(), meMarker:null, streetLayer:null,
   tiles:null, schematic:false, draw:null, sheetProp:null, pendingStatus:null,
-  teamTab:'board', period:'week', boardMetric:'knocks', online:navigator.onLine,
+  teamTab:'board', period:'today', periodFrom:null, periodTo:null, histFrom:null, histLoading:false, boardMetric:'knocks', online:navigator.onLine,
   repId:null, repPeriod:'month', cmpId:null, lastView:'team'
 };
 const byId = (arr, id) => arr.find(x => x.id===id);
@@ -1672,7 +1680,35 @@ function renderFollow(){
 /* ============================================================
    METRICS
    ============================================================ */
-function periodRange(period){ const t0=startOfDay(now()); if (period==='today') return [t0, t0+DAY]; if (period==='week'){ const d=new Date(t0); const dow=(d.getDay()+6)%7; return [t0-dow*DAY, t0+DAY]; } return [t0-29*DAY, t0+DAY]; }
+/* v22.13: Today, Yesterday, This week (Mon-today), Last week (Mon-Sun), This month, 30 days, custom From/To (A.periodFrom/A.periodTo, YYYY-MM-DD).
+   Day starts come from the calendar, so a daylight-saving change never shifts a day by an hour. */
+function sodPlus(n){ const d = new Date(startOfDay(now())); d.setDate(d.getDate()+n); return d.getTime(); }
+function dayStamp(s){ const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s||'')); return m ? new Date(+m[1], +m[2]-1, +m[3]).getTime() : null; }
+function periodRange(period){ const dow=(new Date(startOfDay(now())).getDay()+6)%7;
+  if (period==='today') return [sodPlus(0), sodPlus(1)];
+  if (period==='yesterday') return [sodPlus(-1), sodPlus(0)];
+  if (period==='week') return [sodPlus(-dow), sodPlus(1)];
+  if (period==='lastweek') return [sodPlus(-dow-7), sodPlus(-dow)];
+  if (period==='thismonth'){ const d=new Date(startOfDay(now())); d.setDate(1); return [d.getTime(), sodPlus(1)]; }
+  if (period==='custom'){ let f=dayStamp(A.periodFrom), t=dayStamp(A.periodTo); if (f!=null && t!=null){ if (t<f){ const x=f; f=t; t=x; } const e=new Date(t); e.setDate(e.getDate()+1); return [f, e.getTime()]; } }
+  return [sodPlus(-29), sodPlus(1)]; }
+const PERIODS = [['today','Today'],['yesterday','Yesterday'],['week','This week'],['lastweek','Last week'],['thismonth','This month'],['month','30 days'],['custom','📅 Pick dates']];
+function periodLabel(p){ const [a,b]=periodRange(p); const yr=new Date(now()).getFullYear(); const f=t=>new Date(t).toLocaleDateString([], Object.assign({weekday:'short', month:'short', day:'numeric'}, new Date(t).getFullYear()!==yr?{year:'numeric'}:{}));
+  return dayKey(a)===dayKey(b-1) ? f(a) : f(a)+' – '+f(b-1); }
+function periodBar(id, cur){ const today=dayKey(now());
+  return `<div class="pwrap" id="${id}"><div class="pbar" role="group" aria-label="Dates">${PERIODS.map(([k,l])=>`<button type="button" data-p="${k}" class="${cur===k?'on':''}">${l}</button>`).join('')}</div>`
+    + (cur==='custom' ? `<div class="pdates"><label>From <input type="date" data-pd="from" value="${esc(A.periodFrom||'')}" max="${today}"></label><label>To <input type="date" data-pd="to" value="${esc(A.periodTo||'')}" max="${today}"></label></div>` : '')
+    + `<div class="plabel">${esc(periodLabel(cur))}${A.histLoading ? ' · loading older doors…' : ''}</div></div>`; }
+/* fetch older knocks when the chosen dates start before what the phone holds (35 days at sign-in) */
+async function periodHistory(p, rerender){ try { const a = periodRange(p)[0]; if (A.histFrom==null) A.histFrom = sodPlus(-34); if (!(a < A.histFrom) || !DB.loadHistory || A.histLoading) return;
+  A.histLoading = true; rerender(); try { await DB.loadHistory(new Date(a).toISOString()); A.histFrom = a; A.knocks = await DB.listKnocks(); try { A.appts = await DB.listAppointments(); } catch(e){} normalizeData(); }
+  catch(e){ toast('Could not load the older doors (' + String((e && e.message) || 'no signal').slice(0, 60) + '). The numbers only count the last 35 days.'); }
+  A.histLoading = false; rerender(); } catch(e){ A.histLoading = false; } }
+function wirePeriod(id, set, rerender){ const box=document.getElementById(id); if (!box) return;
+  box.querySelector('.pbar').onclick = e => { const b=e.target.closest('button[data-p]'); if (!b) return; const p=b.dataset.p;
+    if (p==='custom' && !(A.periodFrom && A.periodTo)){ const r=periodRange('lastweek'); A.periodFrom=dayKey(r[0]); A.periodTo=dayKey(r[1]-1); }
+    set(p); rerender(); periodHistory(p, rerender); };
+  box.querySelectorAll('[data-pd]').forEach(i => i.onchange = () => { if (!i.value) return; if (i.dataset.pd==='from') A.periodFrom=i.value; else A.periodTo=i.value; rerender(); periodHistory('custom', rerender); }); }
 function metrics(knocks, props){
   const m = { knocks:0, contacts:0, followups:0, callbacks:0, appts:0, signed:0, byHour:Array(24).fill(0), contactByHour:Array(24).fill(0), days:new Set() };
   // previous outcome on each door, from the full history (not just the period)
@@ -1792,10 +1828,10 @@ function renderTeam(){
   const w=$('#teamWrap');
   const tabs = isMgr() ? [['board','Leaderboard'],['live','Live'],['stats','Stats'],['territories','Territories'],['data','Data']] : [['board','Leaderboard'],['territories','Territories']];
   if (!tabs.some(t=>t[0]===A.teamTab)) A.teamTab='board';
-  w.innerHTML = `<div class="row between" style="margin-bottom:10px"><h2>Team</h2><div class="seg" id="periodSeg" style="width:220px">${[['today','Today'],['week','Week'],['month','30d']].map(([k,l])=>`<button data-p="${k}" class="${A.period===k?'on':''}">${l}</button>`).join('')}</div></div>
+  w.innerHTML = `<div class="row between" style="margin-bottom:6px"><h2>Team</h2></div>${periodBar('periodSeg', A.period)}
     <div class="sub-tabs">${tabs.map(([k,l])=>`<button data-t="${k}" class="${A.teamTab===k?'on':''}">${l}</button>`).join('')}</div><div id="teamBody"></div>`;
   $('.sub-tabs',w).onclick=e=>{ const b=e.target.closest('button'); if(!b) return; A.teamTab=b.dataset.t; renderTeam(); };
-  $('#periodSeg').onclick=e=>{ const b=e.target.closest('button'); if(!b) return; A.period=b.dataset.p; renderTeam(); };
+  wirePeriod('periodSeg', p => { A.period = p; }, () => renderTeam());
   const [t0,t1]=periodRange(A.period);
   const inP = A.knocks.filter(k=>k.created_at>=t0&&k.created_at<t1);
   const reps=A.users.filter(u=>u.role==='rep');
@@ -1847,7 +1883,7 @@ function nudges(period){
     const diffs = [['avgStart','starts at '+fmtClock(top.avgStart)+' vs team '+fmtClock(avg('avgStart')), (avg('avgStart')-top.avgStart)/1.5],['eveningShare','knocks '+Math.round(top.eveningShare*100)+'% after 4 pm vs team '+Math.round(avg('eveningShare')*100)+'%', (top.eveningShare-avg('eveningShare'))/0.15],['followupsPerDay','runs '+top.followupsPerDay.toFixed(1)+' follow-up visits a day vs team '+avg('followupsPerDay').toFixed(1), (top.followupsPerDay-avg('followupsPerDay'))/2],['apptRate','books '+Math.round(top.apptRate*100)+'% of talks vs team '+Math.round(avg('apptRate')*100)+'%', (top.apptRate-avg('apptRate'))/0.08]].filter(x=>isFinite(x[2])).sort((a,b)=>b[2]-a[2]);
     if (diffs.length && diffs[0][2] > 0.6) out.unshift({ k:'good', ic:'★', rep:top.uid, t:`Spread this: ${top.name.split(' ')[0]} ${diffs[0][1]}`, s:'Make it the team standard this week. Record a ride-along for the training library.' });
   }
-  const noShow = A.appts.filter(a=>a.status==='no_show' && a.at>periodRange(period)[0]).length, heldN = A.appts.filter(a=>a.status==='held' && a.at>periodRange(period)[0]).length;
+  const noShow = A.appts.filter(a=>a.status==='no_show' && a.at>=periodRange(period)[0] && a.at<periodRange(period)[1]).length, heldN = A.appts.filter(a=>a.status==='held' && a.at>=periodRange(period)[0] && a.at<periodRange(period)[1]).length;
   if (noShow && noShow/(noShow+heldN) > 0.2) out.push({ k:'bad', ic:'!', t:`${Math.round(100*noShow/(noShow+heldN))}% of appointments no-show`, s:'Turn on the confirmation text the morning of, and have the rep swing by the day before.' });
   const needs = A.appts.filter(a=>(a.status==='scheduled'||a.status==='confirmed') && a.at < now()-60*60000).length;
   if (needs) out.push({ k:'warn', ic:'?', t:`${needs} past appointment${needs===1?'':'s'} with no outcome logged`, s:'Held, no-show, or rescheduled — the show rate is wrong until these are set.' });
@@ -1988,7 +2024,7 @@ function renderRep(){
       <div class="cmp">${[['Doors / day',s.doorsPerDay.toFixed(1),c.doorsPerDay.toFixed(1)],['Average start',fmtClock(s.avgStart),fmtClock(c.avgStart)],['Hours / day',s.hoursPerDay.toFixed(1),c.hoursPerDay.toFixed(1)],['Before 10:30',Math.round(s.earlyShare*100)+'%',Math.round(c.earlyShare*100)+'%'],['After 4 pm',Math.round(s.eveningShare*100)+'%',Math.round(c.eveningShare*100)+'%'],['Answer rate',Math.round(s.contactRate*100)+'%',Math.round(c.contactRate*100)+'%'],['Appt rate',Math.round(s.apptRate*100)+'%',Math.round(c.apptRate*100)+'%'],['Follow-up visits / day',s.followupsPerDay.toFixed(1),c.followupsPerDay.toFixed(1)],['Show rate',s.showRate==null?'—':Math.round(s.showRate*100)+'%',c.showRate==null?'—':Math.round(c.showRate*100)+'%']].map(([l,a,b])=>`<div class="v me">${a}</div><div class="l">${l}</div><div class="v">${b}</div>`).join('')}</div>
       <div class="row between muted" style="font-size:12px;margin-top:6px"><span>${esc(u.name)}</span><span>${esc(c.name)}</span></div></div>` : '';
   w.innerHTML = `<div class="stack">
-    <div class="row between"><button class="back" id="repBack">‹ Back</button><div class="seg" style="width:220px" id="repPeriod">${[['week','Week'],['month','30d']].map(([k,l])=>`<button data-p="${k}" class="${A.repPeriod===k?'on':''}">${l}</button>`).join('')}</div></div>
+    <div class="row between"><button class="back" id="repBack">‹ Back</button></div>${periodBar('repPeriod', A.repPeriod)}
     <div class="row"><span class="avatar" style="background:${u.color};width:48px;height:48px;font-size:22px">${esc(u.name[0])}</span><div><h2>${esc(u.name)}</h2><div class="muted" style="font-size:13px">${u.role} · ${myTerrsOf(u.id).map(t=>t.name).join(', ')||'no territory'} · ${s.days} day${s.days===1?'':'s'} worked</div></div></div>
     <div class="grid3">${tile(s.doors,'Doors',s.doorsPerDay.toFixed(1)+' / day')}${tile(s.contacts,'Talks',Math.round(s.contactRate*100)+'% answer')}${tile(s.appts,'Appts',Math.round(s.apptRate*100)+'% of talks')}${tile(s.signed,'Signed',pct(s.signed,s.appts)+' of appts')}${tile(fmtClock(s.avgStart),'Avg start',s.hoursPerDay.toFixed(1)+' h / day')}${tile(Math.round(s.eveningShare*100)+'%','After 4 pm',Math.round(s.earlyShare*100)+'% before 10:30')}</div>
     ${why}
@@ -1997,7 +2033,7 @@ function renderRep(){
     ${cmpBlock}
   </div>`;
   $('#repBack').onclick = () => showView(A.lastView);
-  $('#repPeriod').onclick = e => { const b=e.target.closest('button'); if (!b) return; A.repPeriod=b.dataset.p; renderRep(); };
+  wirePeriod('repPeriod', p => { A.repPeriod = p; }, () => renderRep());
   const cs=$('#cmpSel'); if (cs) cs.onchange = () => { A.cmpId = cs.value; renderRep(); };
 }
 $('#tabbar').addEventListener('click', e => { const t=e.target.closest('.tab'); if (t) showView(t.dataset.view); });
@@ -3474,9 +3510,8 @@ window.CW_DECKS = [
     const chips = (id, opts, cur) => '<div class="pf-chips" data-pf="' + id + '">' + opts.map(([k, l]) => '<button type="button" data-k="' + esc(k) + '" class="' + (k === cur ? 'on' : '') + '">' + esc(l) + '</button>').join('') + '</div>';
     function boardCard() {
       const b = P.board; const top = b && b.rows.length ? Math.max(1, b.rows[0].n) : 1;
-      return '<div class="card stack" id="pfBoard"><h3 style="font-size:18px">Leaderboard <span class="pf-dim">live · ' + esc(b ? b.as_of : '…') + '</span></h3>' +
+      return '<div class="card stack" id="pfBoard"><h3 style="font-size:18px">Leaderboard <span class="pf-dim">' + esc(winName()) + ' · as of ' + esc(b ? b.as_of : '…') + '</span></h3>' +
         chips('metric', [['doors', 'Doors'], ['contacts', 'Contacts'], ['appts', 'Appts set'], ['sat', 'Appts sat'], ['signed', 'Signed']], P.metric) +
-        chips('window', [['today', 'Today'], ['week', 'This week'], ['month', 'This month']], P.window) +
         (hasTeam() ? chips('scope', [['company', 'Whole company'], ['team', 'My team']], P.scope) : '') +
         '<label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="checkbox" id="pfCohort" ' + (P.cohort ? 'checked' : '') + '> my starting class only' + (b && b.cohort ? ' (' + esc(b.cohort_name) + ')' : '') + '</label>' +
         (b && b.total > b.rows.length ? '<div class="pf-dim">Top ' + b.rows.length + ' of ' + b.total + ' reps, plus you.</div>' : '') +
@@ -3536,14 +3571,13 @@ window.CW_DECKS = [
       return '<div class="card stack" id="pfFeed"><h3 style="font-size:18px">Team feed</h3>' + (me ? '<div class="row" style="gap:6px"><input class="cw-in" id="pfShout" maxlength="200" placeholder="Shout-out to the team…" style="flex:1;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--line,#cfd6dc);background:transparent;color:inherit"><button type="button" class="btn sm primary" data-pf="shout">Post</button></div>' : '') +
         (P.msg ? '<div class="pf-msg">' + esc(P.msg) + '</div>' : '') + (!f ? '<div class="pf-dim">Loading…</div>' : f.error ? errLine(f) : f.events.length ? f.events.slice(0, 12).map(e => '<div class="pf-ev">' + ({ appointment: '📅 ', signed: '✍️ ', personal_best: '🏅 ', winner: '🏆 ', shout: '📣 ' }[e.kind] || '') + esc(e.text) + '<small>' + esc(String(e.t).replace('T', ' ').slice(0, 16)) + '</small></div>').join('') : '<div class="pf-dim">Quiet so far today. Appointments, signings, personal bests and shout-outs show up here for the whole team.</div>') + '</div>';
     }
-    function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; w.insertBefore(host, w.firstChild); }
+    function paintTeam() { const w = $('teamWrap'); if (!w) return; injectCss(); let host = $('pfTeam'); if (!host) { host = document.createElement('div'); host.id = 'pfTeam'; host.className = 'stack'; } const tb = $('teamBody'); if (tb && host.nextSibling !== tb) w.insertBefore(host, tb); else if (!tb && host.parentNode !== w) w.insertBefore(host, w.firstChild);
       const onBoard = (() => { try { return (A.teamTab || 'board') === 'board'; } catch (e) { return true; } })();   /* 10/19: the leaderboard cards belong to the Leaderboard tab only; on Territories/Data/Live/Stats they pushed the tab's own content (Draw a new territory) below the screen */
       host.style.display = onBoard ? '' : 'none'; if (!onBoard) { host.innerHTML = ''; return; }
       host.innerHTML = boardCard() + recordCard() + compCard() + riskCard(); wire(host); }
     function paintMe() { const w = $('meWrap'); if (!w) return; injectCss(); let host = $('pfMe'); if (!host) { host = document.createElement('div'); host.id = 'pfMe'; host.className = 'stack'; const stack = w.querySelector('.stack'); if (stack && stack.children.length > 1) stack.insertBefore(host, stack.children[1]); else w.appendChild(host); } host.innerHTML = paceCard() + profileCard() + feedCard() + usageCard(); wire(host); }
     function wire(host) {
       host.querySelectorAll('[data-pf="metric"] button').forEach(b => b.onclick = () => { P.metric = b.dataset.k; loadBoard(); });
-      host.querySelectorAll('[data-pf="window"] button').forEach(b => b.onclick = () => { P.window = b.dataset.k; loadBoard(); });
       host.querySelectorAll('[data-pf="scope"] button').forEach(b => b.onclick = () => { P.scope = b.dataset.k; loadBoard(); });
       const c = host.querySelector('#pfCohort'); if (c) c.onchange = () => { P.cohort = c.checked; loadBoard(); };
       host.querySelectorAll('[data-pf="new"]').forEach(b => b.onclick = () => { P.newOpen = true; paintTeam(); });
@@ -3555,7 +3589,11 @@ window.CW_DECKS = [
       host.querySelectorAll('[data-pf="end"]').forEach(b => b.onclick = () => endComp(b.dataset.id));
       host.querySelectorAll('[data-pf="shout"]').forEach(b => b.onclick = postShout);
     }
-    async function loadBoard() { try { P.board = await call('/perf/board', { metric: P.metric, window: P.window, cohort: P.cohort, scope: P.scope }); } catch (e) { P.board = { rows: [], as_of: '', error: fail(e) }; } paintTeam(); }
+    /* v60 (10/26 Charles: "we need a date filter ... a shortcut for last week"): the leaderboard follows the Team tab's date bar (A.period): one set of dates for the whole tab */
+    const bkey = () => { try { return [A.period, A.periodFrom, A.periodTo].join('|'); } catch (e) { return 'today'; } };
+    const winBody = () => { try { const p = A.period || 'today'; if (p === 'today' || p === 'week') return { window: p }; if (p === 'thismonth') return { window: 'month' }; const r = periodRange(p); return { window: 'range', from: dayKey(r[0]), to: dayKey(r[1] - 1) }; } catch (e) { return { window: 'today' }; } };
+    const winName = () => { try { return ({ today: 'today', yesterday: 'yesterday', week: 'this week', lastweek: 'last week', thismonth: 'this month', month: 'last 30 days' })[A.period] || periodLabel(A.period); } catch (e) { return 'today'; } };
+    async function loadBoard() { const seq = (P.bSeq = (P.bSeq || 0) + 1); P.boardKey = bkey(); let b; try { b = await call('/perf/board', Object.assign({ metric: P.metric, cohort: P.cohort, scope: P.scope }, winBody())); } catch (e) { b = { rows: [], as_of: '', error: /unknown metric or window/.test(String(e && e.message)) ? 'The leaderboard for these dates turns on after a quick server update. Today, This week and This month work now; the team numbers below already use these dates.' : fail(e) }; } if (seq !== P.bSeq) return; /* a later tap won */ P.board = b; paintTeam(); }
     async function loadProfile() { try { P.profile = await call('/perf/badges', {}); } catch (e) { P.profile = { profile: {}, badges: [], earned: 0, next: [], error: e.message }; } paintMe(); }
     async function loadUsage() { if (!admin()) return; try { P.usage = await call('/billing/usage', {}); } catch (e) { P.usage = { month: '', rows: [], error: fail(e) }; } paintMe(); }
     async function loadComps() { try { P.comps = await call('/perf/competitions', {}); } catch (e) { P.comps = { competitions: [], error: fail(e) }; } paintTeam(); }
@@ -3572,7 +3610,7 @@ window.CW_DECKS = [
     async function endComp(id) { if (!(typeof confirmBox === 'function')) return; confirmBox('End this competition?', 'The current leader is announced as the winner in the team feed.', async () => { try { await call('/perf/compete', { action: 'end', id }); toast('Winner announced'); await loadComps(); await loadFeed(); } catch (e) { toast(String(e.message)); } }, 'End it'); }
     async function postShout() { const i = $('pfShout'); const text = (i && i.value || '').trim(); if (!text) return; try { await call('/perf/shout', { text }); i.value = ''; P.msg = ''; await loadFeed(); } catch (e) { P.msg = String(e.message); paintMe(); } }
     function tick() { if (!$('view-team') || !$('view-me')) return; if (!$('view-team').hidden) { loadBoard(); loadComps(); loadRisk(); } if (!$('view-me').hidden) { loadPace(); loadFeed(); loadProfile(); loadUsage(); } }
-    const _team = window.renderTeam; if (typeof _team === 'function') window.renderTeam = function () { const r = _team.apply(this, arguments); try { paintTeam(); if (!P.board) { loadBoard(); loadComps(); loadRisk(); } } catch (e) { console.warn('perf team', e); } return r; };
+    const _team = window.renderTeam; if (typeof _team === 'function') window.renderTeam = function () { const r = _team.apply(this, arguments); try { paintTeam(); if (!P.board) { loadBoard(); loadComps(); loadRisk(); } else if (P.boardKey !== bkey()) loadBoard(); } catch (e) { console.warn('perf team', e); } return r; };
     const _me = window.renderMeView; if (typeof _me === 'function') window.renderMeView = function () { const r = _me.apply(this, arguments); try { paintMe(); if (!P.pace) { loadPace(); loadFeed(); loadProfile(); loadUsage(); } } catch (e) { console.warn('perf me', e); } return r; };
     P.timer = setInterval(() => { try { if (document.visibilityState === 'visible') tick(); } catch (e) {} }, 60000);
     window.DBPerf = { state: P, loadBoard, loadComps, loadFeed, loadPace, loadRisk, loadUsage, loadProfile };
