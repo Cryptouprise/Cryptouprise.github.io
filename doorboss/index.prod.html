@@ -1090,15 +1090,9 @@ function startView(map){
   if (use.length === 1) map.setView(b.getCenter(), 17);
   else map.fitBounds(b.pad(0.08), { maxZoom:17, animate:false });
 }
-/* v22.16 (Charles 11/1: "pins on the houses were disappearing"): the pin canvas was only 10% bigger than the screen (Leaflet's default), so while a
-   finger drags the map every house pulled in from outside that strip stayed blank until the finger lifted (measured: 237 of 424 pins gone after a
-   380 px drag). The canvas now reaches as far as the pins we keep (renderPins pad 0.6), capped so a tablet or laptop stays under the browser's
-   canvas size limit (Leaflet draws it at 2x on retina screens; over the limit the browser draws nothing at all). */
-function canvasPad(){ const w = Math.max(window.innerWidth || 390, 320), h = Math.max(window.innerHeight || 760, 320); return Math.max(0.1, Math.min(0.6, Math.floor((Math.sqrt(14e6 / (4 * w * h)) - 1) / 2 * 100) / 100)); }
 function initMap(){
-  const map = L.map('map', { preferCanvas:true, renderer:L.canvas({ tolerance:10, padding:canvasPad() }), zoomControl:false, attributionControl:false, tap:false });   // tolerance: a tap within 10 px of a pin counts as hitting it
+  const map = L.map('map', { preferCanvas:true, renderer:L.canvas({ tolerance:10 }), zoomControl:false, attributionControl:false, tap:false });   // tolerance: a tap within 10 px of a pin counts as hitting it
   A.map = map;
-  map.on('resize', () => { try { const r = map.options.renderer; if (r && r.options) r.options.padding = canvasPad(); } catch (e) {} });   /* v22.16: rotated phone / docked call window */
   startView(map);
   map.on('dragstart', () => { A.userMoved = true; });
   map.getContainer().addEventListener('touchstart', () => { A.userMoved = true; }, { passive:true });   // pinch / cluster tap too
