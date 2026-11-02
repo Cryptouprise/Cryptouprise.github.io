@@ -1171,9 +1171,10 @@ function filterChips(){
     `<button class="chip${A.mine?' on':''}" data-mine="1">My territory</button>` +
     `<button class="chip${A.orphanOnly?' on':''}" data-orph="1" style="${A.orphanOnly?'':'border-color:#e02438;color:#e02438'}">● Bankrupt installer</button>` +
     `<button class="chip${A.activeOnly?' on':''}" data-act="1">In business</button>` +
+    `<button class="chip${A.routeInstaller?' on':''}" data-route="1">Route: ${esc(A.routeInstaller || 'all')}</button>` +
     (isMgr() ? `<button class="chip${A.showReps?' on':''}" data-reps="1">Reps</button>` : '') +
     `<button class="chip${A.basemap==='satellite'?' on':''}" data-sat="1" ${A.schematic?'style="opacity:.5"':''}>Satellite</button>`;
-  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; if (A.orphanOnly) A.activeOnly=false; } else if (b.dataset.act){ A.activeOnly=!A.activeOnly; if (A.activeOnly) A.orphanOnly=false; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
+  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; if (A.orphanOnly) A.activeOnly=false; } else if (b.dataset.act){ A.activeOnly=!A.activeOnly; if (A.activeOnly) A.orphanOnly=false; } else if (b.dataset.route){ if (A.routeInstaller) A.routeInstaller=null; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
 }
 /* v22.10: a house without a real position (an intake client opened for a call) is never a map pin, a cluster, a Knock next or a route stop */
 function hasLL(p){ return !!p && p.lat != null && p.lng != null && p.lat !== '' && p.lng !== '' && isFinite(p.lat) && isFinite(p.lng); }
@@ -1286,6 +1287,37 @@ async function showTrail(userId, dayT){
   A.map.once('click', () => { if (A.trailLayer){ A.map.removeLayer(A.trailLayer); A.trailLayer=null; } });
 }
 function skipLoad(){ try { const o = JSON.parse(localStorage.getItem('doorboss.skipnext.v1') || '{}'); const t = Date.now(); for (const k in o) if (t - o[k] > 14*3600000) delete o[k]; return o; } catch(e){ return {}; } }   /* v22.7: houses the rep skipped with ✕, forgotten after 14 h */
+/* v22.15 (10/29, Charles): Knock next by intent. score = distance_m - bonus; the bonus only applies inside 1500 m so a
+   far-away "interested" never drags the rep across town (beyond that the nearest door wins). why names the reason. */
+function intentBonus(p){
+  let b = 0;
+  if (p.status==='interested') b = Math.max(b, 500);
+  if (p.tier==='verified_uninstalled') b = Math.max(b, 400);
+  if (p.installer_status==='bankrupt') b = Math.max(b, 300);
+  if (p.tier==='verified_installed') b = Math.max(b, 150);
+  if (p.tier==='permit_only') b = Math.max(b, 50);
+  return b;
+}
+/* v22.15: the reason line for the Knock next card ('Interested · 120 m', 'Bankrupt installer · 200 m', ...) */
+function intentWhy(p){
+  if (p.status==='interested') return 'Interested';
+  if (p.tier==='verified_uninstalled') return 'No panels (high intent)';
+  if (p.installer_status==='bankrupt') return 'Bankrupt installer';
+  if (p.tier==='verified_installed') return 'Installed';
+  if (p.tier==='permit_only') return 'Permit';
+  return S[p.status].label;
+}
+/* v22.15: best door by score (distance minus intent bonus, bonus capped to the 1500 m ring) */
+function intentPick(arr){
+  let best=null, bs=Infinity, bd=Infinity;
+  for (const p of arr){
+    const d = haversine(A.myPos,[p.lat,p.lng]);
+    const b = d <= 1500 ? intentBonus(p) : 0;
+    const sc = d - b;
+    if (sc < bs){ bs=sc; best=p; bd=d; }
+  }
+  return best ? { p:best, d:bd, why:intentWhy(best) } : undefined;
+}
 function updateNext(){
   const card=$('#nextCard'); const skipped = skipLoad();
   if (A.route){ showNextRouteCard(); return; }
@@ -1295,7 +1327,7 @@ function updateNext(){
   let pickP=null, why='';
   const nearest = arr => { let best=null, bd=Infinity; for (const p of arr){ const d=haversine(A.myPos,[p.lat,p.lng]); if (d<bd){ bd=d; best=p; } } return best ? {p:best, d:bd} : undefined; };
   if (due.length){ const n=nearest(due); pickP=n.p; why='Follow-up due · '+fmtDist(n.d); }
-  else { const kn = cand.filter(p => isKnockable(p) && !(p.status==='callback' && p.callback_at && p.callback_at > now()+30*60000) && !(p.status!=='unknocked' && p.last_knock_at && now()-p.last_knock_at < 4*3600000)); const n=nearest(kn); if (n){ pickP=n.p; why=(S[n.p.status].label)+' · '+fmtDist(n.d); } }
+  else { const kn = cand.filter(p => isKnockable(p) && !(p.status==='callback' && p.callback_at && p.callback_at > now()+30*60000) && !(p.status!=='unknocked' && p.last_knock_at && now()-p.last_knock_at < 4*3600000)); const n=intentPick(kn); if (n){ pickP=n.p; why=n.why+' · '+fmtDist(n.d); } }
   if (!pickP){ card.hidden=true; A.nextId=null; drawNextRing(null); return; }
   A.nextId=pickP.id; card.hidden=false; drawNextRing(pickP);
   $('#nextSw').style.background = S[pickP.status].color;
@@ -1418,10 +1450,43 @@ function planRoute(start, props, opts={}){
 }
 function routeCandidates(){
   const inTerr = !A.mine ? A.props : A.props.filter(inMyTerr);
-  return inTerr.filter(p => hasLL(p) && p.status!=='do_not_knock' && (isKnockable(p)));
+  /* v22.15: a route can be pinned to one installer (bankrupt-installer routes are the point) */
+  const byInst = A.routeInstaller ? inTerr.filter(p => p.installer === A.routeInstaller) : inTerr;
+  return byInst.filter(p => hasLL(p) && p.status!=='do_not_knock' && (isKnockable(p)));
+}
+/* v22.15 (10/29, Charles): if the knockable doors in territory span >= 2 installers with >= 3 houses each, ask which
+   installer to walk first. Tiny fixed panel (no bottom sheet in this file), 44px buttons, top 6 by house count + all. */
+function routeInstallerChooser(){
+  const inTerr = !A.mine ? A.props : A.props.filter(inMyTerr);
+  const kn = inTerr.filter(p => hasLL(p) && p.status!=='do_not_knock' && isKnockable(p));
+  const counts = {};
+  for (const p of kn){ const k = p.installer || ''; if (!k) continue; counts[k] = (counts[k]||0) + 1; }
+  const top = Object.keys(counts).filter(k => counts[k] >= 3).sort((a,b) => counts[b]-counts[a]).slice(0,6);
+  if (top.length < 2) return false;
+  const old = document.getElementById('routePick'); if (old) old.remove();
+  const box = document.createElement('div');
+  box.id = 'routePick';
+  box.style.cssText = 'position:fixed;left:12px;right:12px;bottom:12px;z-index:10001;background:var(--card,#fff);color:var(--fg,#111);border:1px solid rgba(0,0,0,.18);border-radius:14px;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.28);max-height:70vh;overflow:auto';
+  const title = document.createElement('div');
+  title.textContent = 'Route by installer';
+  title.style.cssText = 'font-weight:600;font-size:14px;padding:2px 4px 8px';
+  box.appendChild(title);
+  const mk = (label, val) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.style.cssText = 'display:block;width:100%;min-height:44px;margin:0 0 6px;border-radius:10px;border:1px solid rgba(0,0,0,.18);background:transparent;color:inherit;font-size:14px;text-align:left;padding:0 12px';
+    b.onclick = () => { A.routeInstaller = val; const el = document.getElementById('routePick'); if (el) el.remove(); filterChips(); startRoute(); };
+    return b;
+  };
+  for (const k of top) box.appendChild(mk(k + ' · ' + counts[k] + ' doors', k));
+  box.appendChild(mk('All installers', null));
+  document.body.appendChild(box);
+  return true;
 }
 function startRoute(){
   if (!A.myPos) return toast('No position yet');
+  if (A.routeInstaller == null && routeInstallerChooser()) return;
   const cand = routeCandidates(); if (!cand.length) return toast('No knockable doors in your territory');
   const cap = Math.min(cand.length, 120);
   // take the closest N first so the plan stays walkable, then optimise
