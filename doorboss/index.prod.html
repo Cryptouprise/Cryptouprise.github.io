@@ -204,6 +204,7 @@ main{flex:1;min-height:0;position:relative}
 .status-chip.light{color:var(--fg);background:var(--surface-2);border:1px solid var(--line)}
 .tag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;background:var(--surface-2);border:1px solid var(--line);color:var(--muted)}
 .tag.bad{background:var(--bad);color:#fff;border-color:transparent}
+.house-info{font-size:13px;line-height:1.45;color:var(--muted);padding:2px 0 0}.house-info .hi-bad{color:var(--bad);font-weight:600}  /* v22.17 house details */
 .tag.good{background:var(--good);color:#fff;border-color:transparent}
 .tag.warn{background:var(--warn);color:#1b1500;border-color:transparent}
 .tag.accent{background:var(--accent);color:var(--accent-fg);border-color:transparent}
@@ -949,6 +950,15 @@ function normTier(t){ if (!t) return 'none'; const k = String(t).trim().toLowerC
 /* v20: the portal keeps one flag (status 'bankrupt' = orphaned installer); the reason rides in installer_closed, e.g. '2025 (license revoked)' */
 const licReason = c => { const m = /\(license (\w+)\)/i.exec(c || ''); return m ? m[1].toLowerCase() : null; };
 const licTag = c => { const r = licReason(c); return r ? 'License ' + r : 'Bankrupt'; };
+/* v22.18 (Charles 11/11): named installers that are still in business get their own pin (pink + cyan ring), chip and tag. One list, matched on the
+   installer name; a home flagged bankrupt is never a live-installer home. To add a company, add its name here. */
+const LIVE_INSTALLER_RX = /\bsunrun\b|\bion\s+(solar|developer)\b|\bvivint\b|\btesla\b|\bsolar\s*city\b/i;
+const isLiveInstaller = p => !!p && p.installer_status !== 'bankrupt' && LIVE_INSTALLER_RX.test(String(p.installer || ''));
+/* v22.17 (Charles 11/3: "make sure to include that data and any other valuable information that the sales guy could use"): the import note
+   (installer + state license number and status, install / final dates, battery, other contractors, owner mailing address) on the house card,
+   behind a Details tag in the tag row so the outcome buttons never move. Parts split on ';' or '·' (California and Vegas import formats). */
+const houseInfoLines = n => String(n || '').split(/\s*[;\u00b7]\s*/).map(x => x.trim()).filter(Boolean).slice(0, 10)
+  .map(x => `<div${/revoked|expired|suspend|cancel|bankrupt|closed \d{4}/i.test(x) ? ' class="hi-bad"' : ''}>${esc(x)}</div>`).join('');
 function normalizeData(){
   let fixed = 0;
   for (const p of A.props){
@@ -1171,10 +1181,11 @@ function filterChips(){
     `<button class="chip${A.mine?' on':''}" data-mine="1">My territory</button>` +
     `<button class="chip${A.orphanOnly?' on':''}" data-orph="1" style="${A.orphanOnly?'':'border-color:#e02438;color:#e02438'}">● Bankrupt installer</button>` +
     `<button class="chip${A.activeOnly?' on':''}" data-act="1">In business</button>` +
+    `<button class="chip${A.liveOnly?' on':''}" data-live="1" style="${A.liveOnly?'':'border-color:#e0199a;color:#e0199a'}">\u25cf Live installer</button>` +
     `<button class="chip${A.routeInstaller?' on':''}" data-route="1">Route: ${esc(A.routeInstaller || 'all')}</button>` +
     (isMgr() ? `<button class="chip${A.showReps?' on':''}" data-reps="1">Reps</button>` : '') +
     `<button class="chip${A.basemap==='satellite'?' on':''}" data-sat="1" ${A.schematic?'style="opacity:.5"':''}>Satellite</button>`;
-  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; if (A.orphanOnly) A.activeOnly=false; } else if (b.dataset.act){ A.activeOnly=!A.activeOnly; if (A.activeOnly) A.orphanOnly=false; } else if (b.dataset.route){ if (A.routeInstaller) A.routeInstaller=null; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
+  c.onclick = e => { const b=e.target.closest('.chip'); if (!b) return; if (b.dataset.sat){ setBasemap(A.basemap==='satellite'?'streets':'satellite'); return; } if (b.dataset.f){ A.filter=b.dataset.f; } else if (b.dataset.mine){ A.mine=!A.mine; } else if (b.dataset.orph){ A.orphanOnly=!A.orphanOnly; if (A.orphanOnly){ A.activeOnly=false; A.liveOnly=false; } } else if (b.dataset.act){ A.activeOnly=!A.activeOnly; if (A.activeOnly) A.orphanOnly=false; } else if (b.dataset.live){ A.liveOnly=!A.liveOnly; if (A.liveOnly) A.orphanOnly=false; } else if (b.dataset.route){ if (A.routeInstaller) A.routeInstaller=null; } else if (b.dataset.reps){ A.showReps=!A.showReps; renderReps(); } filterChips(); renderPins(); updateNext(); };
 }
 /* v22.10: a house without a real position (an intake client opened for a call) is never a map pin, a cluster, a Knock next or a route stop */
 function hasLL(p){ return !!p && p.lat != null && p.lng != null && p.lat !== '' && p.lng !== '' && isFinite(p.lat) && isFinite(p.lng); }
@@ -1183,6 +1194,7 @@ function visibleProps(){
     if (!hasLL(p)) return false;
     if (A.orphanOnly && p.installer_status!=='bankrupt') return false;   // the portal stores 'bankrupt' (orphaned installer) or 'unknown'
     if (A.activeOnly && p.installer_status==='bankrupt') return false;   // v22.9: the other half: homes whose installer is still in business
+    if (A.liveOnly && !isLiveInstaller(p)) return false;   // v22.18: only the named live installers (Sunrun, Ion Solar, ...)
     if (A.mine && !isMgr() && !inMyTerr(p)) return false;
     if (A.mine && isMgr() && myTerrs().length && !inMyTerr(p)) return false;
     switch (A.filter){
@@ -1204,7 +1216,8 @@ function pinStyle(p){
   const big = p.status==='appointment'||p.status==='signed'||p.status==='callback';
   const base = pc.base, dark = pc.dark;
   const bk = p.installer_status==='bankrupt';   /* v22.9 (Charles 10/22): bankrupt installer = red pin + gold ring, so a rep sees it from across the street */
-  return { radius: big?base+2:base, fillColor: (bk && p.status==='unknocked') ? '#e02438' : col, color: bk ? '#ffc400' : (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: bk ? 3 : A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
+  const lv = !bk && isLiveInstaller(p);   /* v22.18 (Charles 11/11): named live installer = pink pin + cyan ring */
+  return { radius: big?base+2:base, fillColor: (bk && p.status==='unknocked') ? '#e02438' : (lv && p.status==='unknocked') ? '#ff2fb3' : col, color: bk ? '#ffc400' : lv ? '#00d8ff' : (A.basemap==='satellite'||dark)?'#ffffff':'#1b2430', weight: (bk || lv) ? 3 : A.basemap==='satellite'?3:2, fillOpacity: p.status==='do_not_knock'||p.status==='not_interested' ? .6 : 1, opacity:1 };
 }
 const CLUSTER_ZOOM = 15;
 const clusterZoom = () => A.props.length > 8000 ? 16 : CLUSTER_ZOOM;   // v17: a big list stays clustered one zoom level longer
@@ -1339,7 +1352,7 @@ function updateNext(){
 function showOnMap(id){
   const p=byId(A.props,id); if (!p) return;
   closeSheet(); showView('map');
-  if (!visibleProps().some(x=>x.id===p.id)){ A.filter='all'; A.mine=false; A.orphanOnly=false; A.activeOnly=false; filterChips(); }
+  if (!visibleProps().some(x=>x.id===p.id)){ A.filter='all'; A.mine=false; A.orphanOnly=false; A.activeOnly=false; A.liveOnly=false; filterChips(); }
   setTimeout(()=>{ A.map.invalidateSize(); A.userMoved=true; A.map.setView([p.lat,p.lng], 18, { animate:false }); renderPins(); flashPin(p); }, 60);
 }
 function flashPin(p){
@@ -1543,8 +1556,9 @@ function renderSheet(){
         <div class="row" style="gap:6px;flex:none">${statusChip(p.status)}<button class="back" id="sheetClose" aria-label="Close" style="padding:0 10px">Close</button></div>
       </div>
       <div class="row" style="flex-wrap:wrap;gap:6px">
-        ${p.installer_status==='bankrupt'?`<span class="tag bad">${licTag(p.installer_closed)}</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}
+        ${p.installer_status==='bankrupt'?`<span class="tag bad">${licTag(p.installer_closed)}</span>`:''}${isLiveInstaller(p)?`<span class="tag" id="liveInstTag" style="background:#ff2fb3;color:#fff;border-color:#00d8ff">Live installer</span>`:''} ${tierTag(p.tier)} ${p.permit_year?`<span class="tag">Permit ${esc(p.permit_year)}</span>`:''} ${p.system_kw?`<span class="tag">${esc(p.system_kw)} kW</span>`:''}${p.note?` <button type="button" class="tag" id="houseInfoBtn" aria-controls="houseInfo" aria-expanded="${A.houseInfoOpen?'true':'false'}">Details ${A.houseInfoOpen?'\u25b4':'\u25be'}</button>`:''}
       </div>
+      ${p.note?`<div id="houseInfo" class="house-info"${A.houseInfoOpen?'':' hidden'}>${houseInfoLines(p.note)}</div>`:''}
       ${(() => { const ap = apptOf(p); if (!ap) return ''; const open = ap.status==='scheduled'||ap.status==='confirmed'; const past = ap.at <= now();
         return `<div class="appt-card"><div class="row between"><div><div class="eyebrow">Appointment</div><div class="when num">${fmtDT(ap.at)}</div></div>${apptChip(ap)}</div>
           <div class="muted" style="font-size:12px">Set by ${esc(userName(ap.user_id))} · ${ap.ghl_event_id?'on the GHL calendar':'syncing to GHL calendar'}${ap.note?' · '+esc(ap.note):''}</div>
@@ -1590,6 +1604,7 @@ function renderSheet(){
       ${hist.length?`<div><div class="eyebrow" style="margin-bottom:8px">History · ${hist.length} knock${hist.length===1?'':'s'}</div><div class="hist">${hist.slice(0,8).map(k=>`<div class="h"><b>${esc(S[k.status].label)}</b> <span class="muted">· ${esc(userName(k.user_id))} · ${fmtDT(k.created_at)}</span>${k.note?`<div class="muted">${esc(k.note)}</div>`:''}${(k.photos&&k.photos.length)||k.photo_url?`<div class="photo-row" style="margin-top:4px">${(k.photos||[k.photo_url]).map(u=>/^(https?:|data:image\/)/i.test(String(u))?`<img src="${esc(u)}" alt="Door photo">`:'').join('')}</div>`:''}</div>`).join('')}</div></div>`:`<div class="muted" style="font-size:13px">No knocks yet. ${tier.note?esc(tier.note):''}</div>`}
     </div>`;
   $('#sheetClose').onclick = closeSheet;
+  { const b = $('#houseInfoBtn'); if (b) b.onclick = () => { const d = $('#houseInfo'); if (!d) return; d.hidden = !d.hidden; A.houseInfoOpen = !d.hidden; b.setAttribute('aria-expanded', String(!d.hidden)); b.textContent = 'Details ' + (d.hidden ? '\u25be' : '\u25b4'); }; }   /* v22.17 */
   $$('[data-copy]',el).forEach(b=>b.onclick=()=>copyText(b.dataset.copy));
   $$('.sbtn',el).forEach(b=>b.onclick=()=>{
     if (!A.sheetProp || A.sheetProp.id !== p.id) return;
